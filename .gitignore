@@ -1,0 +1,13 @@
+# Compiled class files
+*.class
+
+# Package directories
+dist/
+build_input/
+empty_tmp/
+
+# Log files
+*.log
+
+# Save file (optional: ignore local save progress)
+savegame.dat
