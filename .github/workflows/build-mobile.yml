@@ -1,12 +1,8 @@
-name: Build Mobile (Android APK & iOS IPA)
+name: Build & Release (PC, Android & iOS)
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'android/**'
-      - 'mobile/**'
-      - '.github/workflows/build-mobile.yml'
   workflow_dispatch:
 
 permissions:
@@ -14,7 +10,58 @@ permissions:
 
 jobs:
   # ==========================================
-  # === 1. ANDROID APK BUILD (NATIVE ENGINE)
+  # === 1. WINDOWS PC BUILD (WINDOWS RUNNER)
+  # ==========================================
+  build-pc:
+    name: 💻 Build Windows PC
+    runs-on: windows-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: 21
+
+      - name: 🔨 Compile Java JAR
+        run: |
+          javac -encoding UTF-8 WindTycoon.java
+          jar cfe WindTycoon.jar WindTycoon *.class
+
+      - name: 🚀 Compile Windows C# Launcher (.exe)
+        shell: powershell
+        run: |
+          $csc = (Get-ChildItem -Path "C:\Windows\Microsoft.NET\Framework64\v4.0*" -Filter "csc.exe" -Recurse | Select-Object -First 1).FullName
+          & $csc /target:winexe /out:WindTycoon.exe Launcher.cs
+
+      - name: 📦 Package Windows ZIP
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path output\windows | Out-Null
+          Copy-Item WindTycoon.exe output\windows\
+          Copy-Item WindTycoon.jar output\windows\
+          Copy-Item run.bat output\windows\
+          Copy-Item README.md output\windows\
+          Copy-Item -Recurse music output\windows\music
+          Compress-Archive -Path output\windows\* -DestinationPath output\WindTycoon-Windows.zip
+          Copy-Item WindTycoon.exe output\WindTycoon.exe
+          Copy-Item WindTycoon.jar output\WindTycoon.jar
+          Get-ChildItem output
+
+      - name: 📤 Upload PC Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindTycoon-PC
+          path: |
+            output/WindTycoon-Windows.zip
+            output/WindTycoon.exe
+            output/WindTycoon.jar
+          retention-days: 30
+
+  # ==========================================
+  # === 2. ANDROID APK BUILD (UBUNTU RUNNER)
   # ==========================================
   build-android:
     name: 🤖 Build Android APK (Native)
@@ -56,7 +103,7 @@ jobs:
           retention-days: 30
 
   # ==========================================
-  # === 2. iOS IPA BUILD (MACOS RUNNER)
+  # === 3. iOS IPA BUILD (MACOS RUNNER)
   # ==========================================
   build-ios:
     name: 🍎 Build iOS IPA
@@ -95,13 +142,13 @@ jobs:
           SCHEME_NAME="WindTurbineTycoon"
           echo "Target scheme: $SCHEME_NAME"
 
-          xcodebuild archive \
+          xcodebuild build \
             -workspace "$WORKSPACE_NAME" \
             -scheme "$SCHEME_NAME" \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -archivePath build/WindTurbineTycoon.xcarchive \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -109,14 +156,15 @@ jobs:
             | tee xcodebuild.log || (echo "=== XCODEBUILD FAILED: LAST 80 LINES ===" && tail -n 80 xcodebuild.log && exit 1)
 
           mkdir -p Payload
-          APP_PATH=$(find build/WindTurbineTycoon.xcarchive/Products/Applications -name "*.app" -type d | head -n 1)
+          # Crucial: target Products/Release-iphoneos specifically to avoid empty Intermediates
+          APP_PATH=$(find build/Build/Products -type d -name "*.app" | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            APP_PATH=$(find build -name "*.app" -type d | head -n 1)
+            APP_PATH=$(find build -name "*.app" -type d | grep -v "Intermediates" | head -n 1)
           fi
           echo "Found App bundle at: $APP_PATH"
           if [ -z "$APP_PATH" ]; then
             echo "Error: No .app bundle found!"
-            find build -maxdepth 4
+            find build -maxdepth 5
             exit 1
           fi
           du -sh "$APP_PATH"
@@ -136,14 +184,21 @@ jobs:
           retention-days: 30
 
   # ==========================================
-  # === 3. GITHUB RELEASES PUBLISHER
+  # === 4. UNIFIED GITHUB RELEASES PUBLISHER
   # ==========================================
   publish-release:
-    name: 🚀 Publish to GitHub Releases
-    needs: [build-android, build-ios]
-    if: always() && (needs.build-android.result == 'success' || needs.build-ios.result == 'success')
+    name: 🚀 Publish Unified Release (PC + Android + iOS)
+    needs: [build-pc, build-android, build-ios]
+    if: always() && (needs.build-pc.result == 'success' || needs.build-android.result == 'success' || needs.build-ios.result == 'success')
     runs-on: ubuntu-latest
     steps:
+      - name: 📥 Download PC Artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: WindTycoon-PC
+          path: release-files
+
       - name: 📥 Download Android APK Artifact
         uses: actions/download-artifact@v4
         continue-on-error: true
@@ -161,27 +216,44 @@ jobs:
       - name: 🏷️ Generate Tag Name
         id: vars
         run: |
-          TAG_NAME="v1.0.0-build-${{ github.run_number }}"
+          TAG_NAME="v1.1.0-build-${{ github.run_number }}"
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          ls -lh release-files
 
-      - name: 📦 Create GitHub Release
+      - name: 📦 Create Unified GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.vars.outputs.tag }}
-          name: "⚡ Wind Turbine Tycoon Mobile ${{ steps.vars.outputs.tag }}"
+          name: "⚡ Wind Turbine Tycoon ${{ steps.vars.outputs.tag }} (PC, Android & iOS)"
           body: |
-            ### 📱 Мобильный релиз Wind Turbine Tycoon (iOS & Android)
+            ## ⚡ Wind Turbine Tycoon — Единый Мультиплатформенный Релиз
 
-            * **🤖 Android**: файл `WindTurbineTycoon.apk` (нативный сверхбыстрый движок, прямая установка на любой Android смартфон)
-            * **🍎 iOS**: файл `WindTurbineTycoon.ipa` (установка через AltStore, Sideloadly, Scarlet, TrollStore или личный сертификат)
+            Официальный единый релиз для всех платформ: **Windows PC**, **Android** и **Apple iOS**!
 
-            #### 🎮 Что включено:
-            - Полноценная 60 FPS симуляция ветропарка с сенсорным управлением
-            - Система эволюции моделей (Малый ➔ Средний ➔ Гигант ➔ Офшор ➔ Гибрид ➔ Квантовый VAWT)
-            - Энергетическая биржа и контракты города
-            - R&D Лаборатория науки (аэродинамика, генераторы, ремонтные дроны)
-            - Система престижа / Rebirth (+50% к постоянному доходу)
-            - Фоновая музыка и тактильная отдача (вибрация)
+            ---
+
+            ### 📦 Файлы для загрузки:
+
+            #### 💻 Windows PC:
+            * **`WindTycoon-Windows.zip`** — полный архив с игрой (лаунчер `WindTycoon.exe`, `WindTycoon.jar`, саундтрек и запускной скрипт).
+            * **`WindTycoon.exe`** — автономный быстрый исполняемый лаунчер для Windows.
+            * **`WindTycoon.jar`** — кроссплатформенный исполняемый файл Java (Windows, Linux, macOS).
+
+            #### 🤖 Android:
+            * **`WindTurbineTycoon.apk`** — нативное мобильное приложение с 60 FPS Canvas симуляцией, тактильной вибрацией, эволюцией турбин и фоновой музыкой. Прямая установка на любой Android смартфон!
+
+            #### 🍎 Apple iOS:
+            * **`WindTurbineTycoon.ipa`** — приложение для iPhone и iPad (установка через AltStore, Sideloadly, Scarlet, TrollStore или личный сертификат разработчика).
+
+            ---
+
+            ### 🎮 Особенности версии 1.1.0:
+            * 🚀 **Система Эволюции Ветряков:** Малый ($1k) ➔ Средний ($3.2k) ➔ Гигант ($9k) ➔ Офшор ($24k) ➔ Гибрид ($55k) ➔ Квантовый VAWT ($140k).
+            * 🔋 **Энергетическая биржа и накопители:** пиковый спрос, продажа энергии, защита от блэкаута.
+            * 🔬 **R&D Лаборатория:** аэродинамика лопастей, генераторы, автономные дроны, ИИ прогноза погоды.
+            * 👑 **Престиж / IPO:** постоянный множитель **+50%** ко всем доходам за каждый Rebirth!
+            * 🤖 **Автономные ремонтные дроны:** летают по парку и чинят поломки электросваркой с искрами.
+            * 🎵 **Саундтрек:** встроенная фоновая музыка с плавным зацикливанием и аркадные звуковые эффекты.
           files: |
             release-files/*
         env:
