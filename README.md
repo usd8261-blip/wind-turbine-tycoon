@@ -97,15 +97,12 @@ java -cp . WindTycoon
 3. Отсканируйте появившийся QR-код камерой iPhone или приложением Expo Go на Android — игра мгновенно запустится на вашем устройстве!
 
 ### 🤖 Сборка нативного Android APK
-Сгенерирован полноценный проект Android Studio в папке `mobile/android/`:
+Нативный Android-проект на Java расположен в папке `android/`:
 ```bash
-cd mobile/android
+cd android
 ./gradlew assembleRelease
 ```
-Либо облачная сборка через EAS:
-```bash
-npx eas-cli build -p android --profile preview
-```
+Собранный `.apk` будет создан в `android/app/build/outputs/apk/release/`.
 
 ### 🍎 Сборка для iOS (IPA / TestFlight)
 Сборка выполняется в облаке Expo EAS без необходимости локального Mac:
