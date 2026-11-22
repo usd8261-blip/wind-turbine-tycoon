@@ -35,9 +35,6 @@ jobs:
           distribution: 'temurin'
           java-version: 17
 
-      - name: 📱 Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: 📦 Install npm dependencies
         working-directory: mobile
         run: npm install
@@ -55,7 +52,8 @@ jobs:
       - name: 📁 Prepare APK Artifact
         run: |
           mkdir -p output
-          find mobile/android/app/build/outputs/apk/release -name "*.apk" -exec cp {} output/WindTurbineTycoon.apk \;
+          find mobile/android/app/build/outputs/apk -name "*.apk" -exec cp {} output/WindTurbineTycoon.apk \;
+          ls -la output
 
       - name: 📤 Upload Android APK Artifact
         uses: actions/upload-artifact@v4
@@ -89,28 +87,33 @@ jobs:
         working-directory: mobile
         run: npx expo prebuild --platform ios --clean
 
-      - name: 🔨 Build iOS Archive (Unsigned IPA)
+      - name: 🔨 Build iOS (Unsigned IPA)
         working-directory: mobile/ios
         run: |
           WORKSPACE_NAME=$(find . -maxdepth 1 -name "*.xcworkspace" | head -n 1)
-          SCHEME_NAME=$(basename "$WORKSPACE_NAME" .xcworkspace)
-          echo "Building scheme $SCHEME_NAME with workspace $WORKSPACE_NAME..."
+          echo "Found workspace: $WORKSPACE_NAME"
+          
+          SCHEME_NAME=$(xcodebuild -list -workspace "$WORKSPACE_NAME" | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag' | head -n 1 | xargs)
+          echo "Target scheme: $SCHEME_NAME"
 
-          xcodebuild archive \
+          xcodebuild build \
             -workspace "$WORKSPACE_NAME" \
             -scheme "$SCHEME_NAME" \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath build/WindTurbineTycoon.xcarchive \
+            -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_INJECT_BASE_ENTITLEMENTS=NO \
+            CONFIGURATION_BUILD_DIR=build/Release-iphoneos
 
           mkdir -p Payload
-          cp -r build/WindTurbineTycoon.xcarchive/Products/Applications/*.app Payload/
+          cp -r build/Release-iphoneos/*.app Payload/
           zip -qr WindTurbineTycoon.ipa Payload
           mkdir -p ../../output
           cp WindTurbineTycoon.ipa ../../output/WindTurbineTycoon.ipa
+          ls -la ../../output
 
       - name: 📤 Upload iOS IPA Artifact
         uses: actions/upload-artifact@v4
@@ -125,16 +128,19 @@ jobs:
   publish-release:
     name: 🚀 Publish to GitHub Releases
     needs: [build-android, build-ios]
+    if: always() && (needs.build-android.result == 'success' || needs.build-ios.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: 📥 Download Android APK Artifact
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: WindTurbineTycoon-Android-APK
           path: release-files
 
       - name: 📥 Download iOS IPA Artifact
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: WindTurbineTycoon-iOS-IPA
           path: release-files
@@ -153,7 +159,6 @@ jobs:
           body: |
             ### 📱 Мобильный релиз Wind Turbine Tycoon (iOS & Android)
 
-            Автоматическая сборка для мобильных устройств:
             * **🤖 Android**: файл `WindTurbineTycoon.apk` (прямая установка на любой Android смартфон)
             * **🍎 iOS**: файл `WindTurbineTycoon.ipa` (установка через AltStore, Sideloadly, Scarlet, TrollStore или личный сертификат)
 
@@ -165,7 +170,6 @@ jobs:
             - Система престижа / Rebirth (+50% к доходу)
             - Фоновая музыка и тактильная отдача (вибрация)
           files: |
-            release-files/WindTurbineTycoon.apk
-            release-files/WindTurbineTycoon.ipa
+            release-files/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
