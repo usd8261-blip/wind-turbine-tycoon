@@ -15,3 +15,9 @@ savegame.dat
 # Archives
 *.zip
 
+# Node / Mobile
+node_modules/
+mobile/node_modules/
+mobile/.expo/
+
+

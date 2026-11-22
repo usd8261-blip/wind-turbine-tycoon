@@ -76,5 +76,39 @@ java -cp . WindTycoon
 
 ---
 
+## 📱 Мобильная версия (iOS и Android)
+
+В папке [`mobile/`](mobile/) реализован кроссплатформенный мобильный порт игры на **React Native / Expo** с поддержкой сенсорного управления, тактильной отдачи (Haptics), сохранения прогресса в AsyncStorage и полноэкранного 60 FPS 2D-поля.
+
+### 📲 Быстрый запуск на телефоне (Expo Go)
+1. Установите бесплатное приложение **Expo Go** на свой телефон:
+   * [App Store (iOS)](https://apps.apple.com/app/expo-go/id982107779)
+   * [Google Play (Android)](https://play.google.com/store/apps/details?id=host.exp.exponent)
+2. В терминале запустите сервер разработки:
+   ```bash
+   cd mobile
+   npm start
+   ```
+3. Отсканируйте появившийся QR-код камерой iPhone или приложением Expo Go на Android — игра мгновенно запустится на вашем устройстве!
+
+### 🤖 Сборка нативного Android APK
+Сгенерирован полноценный проект Android Studio в папке `mobile/android/`:
+```bash
+cd mobile/android
+./gradlew assembleRelease
+```
+Либо облачная сборка через EAS:
+```bash
+npx eas-cli build -p android --profile preview
+```
+
+### 🍎 Сборка для iOS (IPA / TestFlight)
+Сборка выполняется в облаке Expo EAS без необходимости локального Mac:
+```bash
+npx eas-cli build -p ios
+```
+
+---
+
 ## 📜 Лицензия
 MIT License. Создано для всех любителей тайкунов и качественных 2D-игр на Java.
