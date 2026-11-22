@@ -1,0 +1,171 @@
+name: Build Mobile (Android APK & iOS IPA)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/build-mobile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================
+  # === 1. ANDROID APK BUILD (UBUNTU RUNNER)
+  # ==========================================
+  build-android:
+    name: 🤖 Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: ☕ Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: 17
+
+      - name: 📱 Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 📦 Install npm dependencies
+        working-directory: mobile
+        run: npm install
+
+      - name: ⚙️ Expo Prebuild Android
+        working-directory: mobile
+        run: npx expo prebuild --platform android --clean
+
+      - name: 🔨 Compile Release APK
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: 📁 Prepare APK Artifact
+        run: |
+          mkdir -p output
+          find mobile/android/app/build/outputs/apk/release -name "*.apk" -exec cp {} output/WindTurbineTycoon.apk \;
+
+      - name: 📤 Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindTurbineTycoon-Android-APK
+          path: output/WindTurbineTycoon.apk
+          retention-days: 30
+
+  # ==========================================
+  # === 2. iOS IPA BUILD (MACOS RUNNER)
+  # ==========================================
+  build-ios:
+    name: 🍎 Build iOS IPA
+    runs-on: macos-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: 📦 Install npm dependencies
+        working-directory: mobile
+        run: npm install
+
+      - name: ⚙️ Expo Prebuild iOS (CocoaPods)
+        working-directory: mobile
+        run: npx expo prebuild --platform ios --clean
+
+      - name: 🔨 Build iOS Archive (Unsigned IPA)
+        working-directory: mobile/ios
+        run: |
+          WORKSPACE_NAME=$(find . -maxdepth 1 -name "*.xcworkspace" | head -n 1)
+          SCHEME_NAME=$(basename "$WORKSPACE_NAME" .xcworkspace)
+          echo "Building scheme $SCHEME_NAME with workspace $WORKSPACE_NAME..."
+
+          xcodebuild archive \
+            -workspace "$WORKSPACE_NAME" \
+            -scheme "$SCHEME_NAME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/WindTurbineTycoon.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+          mkdir -p Payload
+          cp -r build/WindTurbineTycoon.xcarchive/Products/Applications/*.app Payload/
+          zip -qr WindTurbineTycoon.ipa Payload
+          mkdir -p ../../output
+          cp WindTurbineTycoon.ipa ../../output/WindTurbineTycoon.ipa
+
+      - name: 📤 Upload iOS IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindTurbineTycoon-iOS-IPA
+          path: output/WindTurbineTycoon.ipa
+          retention-days: 30
+
+  # ==========================================
+  # === 3. GITHUB RELEASES PUBLISHER
+  # ==========================================
+  publish-release:
+    name: 🚀 Publish to GitHub Releases
+    needs: [build-android, build-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Download Android APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: WindTurbineTycoon-Android-APK
+          path: release-files
+
+      - name: 📥 Download iOS IPA Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: WindTurbineTycoon-iOS-IPA
+          path: release-files
+
+      - name: 🏷️ Generate Tag Name
+        id: vars
+        run: |
+          TAG_NAME="v1.0.0-build-${{ github.run_number }}"
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: 📦 Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: "⚡ Wind Turbine Tycoon Mobile ${{ steps.vars.outputs.tag }}"
+          body: |
+            ### 📱 Мобильный релиз Wind Turbine Tycoon (iOS & Android)
+
+            Автоматическая сборка для мобильных устройств:
+            * **🤖 Android**: файл `WindTurbineTycoon.apk` (прямая установка на любой Android смартфон)
+            * **🍎 iOS**: файл `WindTurbineTycoon.ipa` (установка через AltStore, Sideloadly, Scarlet, TrollStore или личный сертификат)
+
+            #### 🎮 Что включено:
+            - Полноценная 60 FPS 2D-симуляция ветропарка с сенсорным управлением
+            - Система эволюции моделей (Малый ➔ Средний ➔ Гигант ➔ Офшор ➔ Гибрид ➔ Квантовый VAWT)
+            - Энергетическая биржа и подстанция накопителей
+            - Научная лаборатория и автономные ремонтные дроны
+            - Система престижа / Rebirth (+50% к доходу)
+            - Фоновая музыка и тактильная отдача (вибрация)
+          files: |
+            release-files/WindTurbineTycoon.apk
+            release-files/WindTurbineTycoon.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -80,7 +80,12 @@ java -cp . WindTycoon
 
 В папке [`mobile/`](mobile/) реализован кроссплатформенный мобильный порт игры на **React Native / Expo** с поддержкой сенсорного управления, тактильной отдачи (Haptics), сохранения прогресса в AsyncStorage и полноэкранного 60 FPS 2D-поля.
 
-### 📲 Быстрый запуск на телефоне (Expo Go)
+### 📦 Скачать готовые файлы (GitHub Releases)
+Благодаря настроенному GitHub Actions CI/CD, свежие сборки автоматически компилируются на серверах GitHub:
+* **🤖 Android (.apk)**: скачайте файл `WindTurbineTycoon.apk` из раздела [Releases](https://github.com/usd8261-blip/wind-turbine-tycoon/releases) и установите прямо на смартфон.
+* **🍎 iOS (.ipa)**: скачайте файл `WindTurbineTycoon.ipa` из раздела [Releases](https://github.com/usd8261-blip/wind-turbine-tycoon/releases) и установите через AltStore, Sideloadly, Scarlet или личный сертификат разработчика.
+
+### 📲 Быстрый запуск на телефоне без установки (Expo Go)
 1. Установите бесплатное приложение **Expo Go** на свой телефон:
    * [App Store (iOS)](https://apps.apple.com/app/expo-go/id982107779)
    * [Google Play (Android)](https://play.google.com/store/apps/details?id=host.exp.exponent)
