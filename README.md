@@ -76,39 +76,20 @@ java -cp . WindTycoon
 
 ---
 
-## 📱 Мобильная версия (iOS и Android)
+## 📱 Мобильная версия для Android (APK)
 
-В папке [`mobile/`](mobile/) реализован кроссплатформенный мобильный порт игры на **React Native / Expo** с поддержкой сенсорного управления, тактильной отдачи (Haptics), сохранения прогресса в AsyncStorage и полноэкранного 60 FPS 2D-поля.
+В папке [`android/`](android/) реализован нативный легковесный порт игры для Android на чистой Java (Canvas View) с поддержкой сенсорного управления, тактильной отдачи (вибрация), саундтрека, системы эволюции турбин и стабильных 60 FPS.
 
-### 📦 Скачать готовые файлы (GitHub Releases)
-Благодаря настроенному GitHub Actions CI/CD, свежие сборки автоматически компилируются на серверах GitHub:
-* **🤖 Android (.apk)**: скачайте файл `WindTurbineTycoon.apk` из раздела [Releases](https://github.com/usd8261-blip/wind-turbine-tycoon/releases) и установите прямо на смартфон.
-* **🍎 iOS (.ipa)**: скачайте файл `WindTurbineTycoon.ipa` из раздела [Releases](https://github.com/usd8261-blip/wind-turbine-tycoon/releases) и установите через AltStore, Sideloadly, Scarlet или личный сертификат разработчика.
+### 📦 Скачать готовый APK (GitHub Releases)
+Благодаря настроенному GitHub Actions CI/CD, свежие сборки компилируются автоматически:
+* **🤖 Android (.apk)**: скачайте файл `WindTurbineTycoon.apk` из раздела [Releases](https://github.com/usd8261-blip/wind-turbine-tycoon/releases) и установите прямо на смартфон!
 
-### 📲 Быстрый запуск на телефоне без установки (Expo Go)
-1. Установите бесплатное приложение **Expo Go** на свой телефон:
-   * [App Store (iOS)](https://apps.apple.com/app/expo-go/id982107779)
-   * [Google Play (Android)](https://play.google.com/store/apps/details?id=host.exp.exponent)
-2. В терминале запустите сервер разработки:
-   ```bash
-   cd mobile
-   npm start
-   ```
-3. Отсканируйте появившийся QR-код камерой iPhone или приложением Expo Go на Android — игра мгновенно запустится на вашем устройстве!
-
-### 🤖 Сборка нативного Android APK
-Нативный Android-проект на Java расположен в папке `android/`:
+### 🤖 Локальная сборка Android APK
 ```bash
 cd android
 ./gradlew assembleRelease
 ```
-Собранный `.apk` будет создан в `android/app/build/outputs/apk/release/`.
-
-### 🍎 Сборка для iOS (IPA / TestFlight)
-Сборка выполняется в облаке Expo EAS без необходимости локального Mac:
-```bash
-npx eas-cli build -p ios
-```
+Собранный `.apk` создаётся в папке `android/app/build/outputs/apk/release/WindTurbineTycoon.apk`.
 
 ---
 
