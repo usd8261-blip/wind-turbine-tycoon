@@ -117,13 +117,18 @@ jobs:
             | tee xcodebuild.log || (echo "=== XCODEBUILD FAILED: LAST 80 LINES ===" && tail -n 80 xcodebuild.log && exit 1)
 
           mkdir -p Payload
-          APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -maxdepth 1 | head -n 1)
+          APP_PATH=$(find build -type d -name "*.app" | head -n 1)
           echo "Found App bundle at: $APP_PATH"
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: No .app bundle found!"
+            find build -maxdepth 4
+            exit 1
+          fi
           cp -r "$APP_PATH" Payload/
           zip -qr WindTurbineTycoon.ipa Payload
           mkdir -p ../../output
           cp WindTurbineTycoon.ipa ../../output/WindTurbineTycoon.ipa
-          ls -la ../../output
+          ls -lh ../../output
 
       - name: 📤 Upload iOS IPA Artifact
         uses: actions/upload-artifact@v4
