@@ -1,0 +1,21 @@
+package com.usd8261.windtycoon;
+
+public enum ResearchItem {
+    BLADE_AERO("Аэродинамика лопастей", 15.0f, "+20% к выработке всех турбин", "🧪"),
+    GENERATOR("Сверхпроводящий генератор", 35.0f, "+25% к цене продажи на бирже", "⚡"),
+    AUTO_DRONES("Автономные ремонтные дроны", 60.0f, "Дроны сами чинят повреждённые турбины", "🤖"),
+    AI_FORECAST("ИИ прогнозирования погоды", 100.0f, "Пиковые цены на бирже +50%", "🧠");
+
+    public final String title;
+    public final float costSP;
+    public final String description;
+    public final String icon;
+    public boolean unlocked = false;
+
+    ResearchItem(String title, float costSP, String description, String icon) {
+        this.title = title;
+        this.costSP = costSP;
+        this.description = description;
+        this.icon = icon;
+    }
+}
