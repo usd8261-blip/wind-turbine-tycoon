@@ -29,11 +29,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: mobile/package-lock.json
 
-      - name: ☕ Setup Java JDK 17
+      - name: ☕ Setup Java JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: 📦 Install npm dependencies
         working-directory: mobile
@@ -93,7 +93,14 @@ jobs:
           WORKSPACE_NAME=$(find . -maxdepth 1 -name "*.xcworkspace" | head -n 1)
           echo "Found workspace: $WORKSPACE_NAME"
           
-          SCHEME_NAME=$(xcodebuild -list -workspace "$WORKSPACE_NAME" | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag' | head -n 1 | xargs)
+          # Patch project files to allow unsigned build
+          find . -name "project.pbxproj" -exec sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' {} +
+          find . -name "project.pbxproj" -exec sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' {} +
+          find . -name "project.pbxproj" -exec sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g' {} +
+          find . -name "project.pbxproj" -exec sed -i '' 's/DEVELOPMENT_TEAM = [^;]*;//g' {} +
+          
+          # In Expo, the main app scheme matches the project name
+          SCHEME_NAME="WindTurbineTycoon"
           echo "Target scheme: $SCHEME_NAME"
 
           xcodebuild build \
@@ -102,14 +109,17 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_INJECT_BASE_ENTITLEMENTS=NO \
-            CONFIGURATION_BUILD_DIR=build/Release-iphoneos
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            | tee xcodebuild.log || (echo "=== XCODEBUILD FAILED: LAST 80 LINES ===" && tail -n 80 xcodebuild.log && exit 1)
 
           mkdir -p Payload
-          cp -r build/Release-iphoneos/*.app Payload/
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" -maxdepth 1 | head -n 1)
+          echo "Found App bundle at: $APP_PATH"
+          cp -r "$APP_PATH" Payload/
           zip -qr WindTurbineTycoon.ipa Payload
           mkdir -p ../../output
           cp WindTurbineTycoon.ipa ../../output/WindTurbineTycoon.ipa
