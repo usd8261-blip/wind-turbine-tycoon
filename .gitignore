@@ -11,3 +11,7 @@ empty_tmp/
 
 # Save file (optional: ignore local save progress)
 savegame.dat
+
+# Archives
+*.zip
+
