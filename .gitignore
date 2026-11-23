@@ -19,5 +19,10 @@ savegame.dat
 node_modules/
 mobile/node_modules/
 mobile/.expo/
+.gradle/
+android/.gradle/
+android/app/build/
+WindTycoonApp.jar
+
 
 

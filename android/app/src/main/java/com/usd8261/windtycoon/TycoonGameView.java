@@ -1,5 +1,7 @@
 package com.usd8261.windtycoon;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -10,11 +12,23 @@ import android.graphics.RectF;
 import android.graphics.Shader;
 import android.view.MotionEvent;
 import android.view.View;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 public class TycoonGameView extends View {
 
     public enum Tab { BUILD, MARKET, SCIENCE, PRESTIGE }
+
+    private static class SnowFlake {
+        float x, y, speed, size;
+        SnowFlake(float x, float y, float speed, float size) {
+            this.x = x;
+            this.y = y;
+            this.speed = speed;
+            this.size = size;
+        }
+    }
 
     private final GameEngine engine;
     private final SoundManager sound;
@@ -29,16 +43,26 @@ public class TycoonGameView extends View {
     private final Paint pText = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rectTemp = new RectF();
 
-    // Clouds
+    // Clouds & Snow
     private final float[] cloudX = {40, 220, 480};
     private final float[] cloudY = {80, 140, 95};
     private final float[] cloudSpeed = {0.35f, 0.2f, 0.45f};
+    private final List<SnowFlake> snowFlakes = new ArrayList<>();
 
     public TycoonGameView(Context context, GameEngine engine) {
         super(context);
         this.engine = engine;
         this.sound = SoundManager.getInstance(context);
         pStroke.setStyle(Paint.Style.STROKE);
+
+        for (int i = 0; i < 45; i++) {
+            snowFlakes.add(new SnowFlake(
+                    (float) (Math.random() * 800),
+                    (float) (Math.random() * 1200),
+                    1.2f + (float) (Math.random() * 2.5),
+                    2.0f + (float) (Math.random() * 3.0)
+            ));
+        }
     }
 
     @Override
@@ -51,25 +75,38 @@ public class TycoonGameView extends View {
 
         engine.update();
 
-        // 1. Sky & Sun/Moon & Clouds & Skyline
+        // 1. Sky & Sun/Moon & Clouds & Biome Horizon
         drawSkyAndEnvironment(canvas, w, h);
 
         // 2. Top HUD
         float hudBottom = drawTopHUD(canvas, w);
 
         // 3. Main Field (3x3 Grid)
-        float gridTop = hudBottom + 12;
-        float tabAreaHeight = h * 0.38f;
+        float gridTop = hudBottom + 10;
+        float tabAreaHeight = h * 0.42f;
         float gridHeight = h - gridTop - tabAreaHeight;
         drawTurbineGrid(canvas, w, gridTop, gridHeight);
 
         // 4. Floating Particles
         drawFloatingParticles(canvas);
 
-        // 5. Bottom Tabs & Drawer Panel
+        // 5. Snow Particles in Winter
+        if (engine.currentSeason == Season.WINTER) {
+            pFill.setColor(0xDDFFFFFF);
+            for (SnowFlake sf : snowFlakes) {
+                sf.y += sf.speed;
+                if (sf.y > h) {
+                    sf.y = -10;
+                    sf.x = (float) (Math.random() * w);
+                }
+                canvas.drawCircle(sf.x, sf.y, sf.size, pFill);
+            }
+        }
+
+        // 6. Bottom Tabs & Drawer Panel
         drawBottomPanel(canvas, w, h, h - tabAreaHeight, tabAreaHeight);
 
-        // 6. Bottom Event Log Bar
+        // 7. Bottom Event Log Bar
         drawEventLogTicker(canvas, w, h);
 
         // Continuous 60 FPS animation loop
@@ -102,97 +139,96 @@ public class TycoonGameView extends View {
         canvas.drawRect(0, 0, w, h, pFill);
         pFill.setShader(null);
 
-        // Floating Clouds
+        // Clouds
         pFill.setColor(0x40FFFFFF);
         for (int i = 0; i < cloudX.length; i++) {
-            cloudX[i] = (cloudX[i] + cloudSpeed[i]) % (w + 160);
-            float cx = cloudX[i] - 80;
+            cloudX[i] = (cloudX[i] + cloudSpeed[i]) % (w + 120);
+            float cx = cloudX[i] - 60;
             float cy = cloudY[i];
             canvas.drawCircle(cx, cy, 32, pFill);
-            canvas.drawCircle(cx + 25, cy - 8, 26, pFill);
-            canvas.drawCircle(cx - 22, cy + 4, 22, pFill);
-            canvas.drawCircle(cx + 45, cy + 6, 20, pFill);
+            canvas.drawCircle(cx + 25, cy - 8, 38, pFill);
+            canvas.drawCircle(cx + 50, cy, 28, pFill);
         }
 
-        // City skyline silhouettes at horizon
-        pFill.setColor(0xFF1E293B);
-        float horizonY = h * 0.42f;
-        float bWidth = w / 14.0f;
-        for (int i = 0; i < 14; i++) {
-            float bH = 35 + ((i * 37) % 65);
-            canvas.drawRect(i * bWidth, horizonY - bH, (i + 1) * bWidth - 2, horizonY, pFill);
+        // Biome Horizon Ground
+        float horizonY = h * 0.52f;
+        int groundTop = engine.currentSeason.groundTop;
+        int groundBot = engine.currentSeason.groundBot;
 
-            // Blinking yellow windows at night
-            if (t > 0.75f || t < 0.30f) {
-                pFill.setColor(0xAAFEF08A);
-                for (int wy = (int) (horizonY - bH + 8); wy < horizonY - 6; wy += 12) {
-                    if ((i + wy) % 3 == 0) {
-                        canvas.drawRect(i * bWidth + 4, wy, i * bWidth + 10, wy + 6, pFill);
-                    }
-                }
-                pFill.setColor(0xFF1E293B);
+        if (engine.currentBiome == Biome.OCEAN) {
+            groundTop = 0xFF0077B6;
+            groundBot = 0xFF03045E;
+        } else if (engine.currentBiome == Biome.PEAKS) {
+            if (engine.currentSeason == Season.WINTER) {
+                groundTop = 0xFFE2E8F0;
+                groundBot = 0xFF94A3B8;
+            } else {
+                groundTop = 0xFF475569;
+                groundBot = 0xFF1E293B;
             }
         }
 
-        // Rolling Green Landscape
-        pFill.setColor(0xFF047857);
+        LinearGradient gGrad = new LinearGradient(0, horizonY, 0, h, groundTop, groundBot, Shader.TileMode.CLAMP);
+        pFill.setShader(gGrad);
         canvas.drawRect(0, horizonY, w, h, pFill);
+        pFill.setShader(null);
+
+        // Ocean Waves
+        if (engine.currentBiome == Biome.OCEAN) {
+            pStroke.setColor(0x35FFFFFF);
+            pStroke.setStrokeWidth(1.5f);
+            long tm = System.currentTimeMillis();
+            for (float wy = horizonY + 20; wy < h * 0.65f; wy += 28) {
+                float shift = (float) (((tm / 30 + wy * 4) % 120) - 60);
+                for (float wx = shift - 80; wx < w + 80; wx += 60) {
+                    rectTemp.set(wx, wy, wx + 40, wy + 16);
+                    canvas.drawArc(rectTemp, 180, 180, false, pStroke);
+                }
+            }
+        }
     }
 
     private float drawTopHUD(Canvas canvas, int w) {
-        float startY = 32;
-        float rowH = 38;
-        float pad = 10;
+        float startY = 30;
+        float rowH = 34;
+        float pad = 8;
+        float colW = (w - pad * 3 - 48) / 2.0f;
 
-        // Row 1: Balance & Income & Audio
-        float colW = (w - pad * 3 - 50) / 2.0f;
-
-        // Balance Card
+        // Row 1: Balance & Output
         drawPill(canvas, pad, startY, colW, rowH, 0xDD111827, 0xFF10B981,
-                "💰 $" + formatNumber(engine.balance), 0xFF10B981, 16, true);
+                "💰 $" + formatNumber(engine.balance), 0xFF10B981, 15, true);
 
-        // Net Output & $/s Card
         double inc = engine.getIncomePerSecond();
         String netStr = String.format(Locale.US, "⚡ %.0f кВт (+%.1f$/с)", engine.getTotalOutputKW(), inc);
         drawPill(canvas, pad * 2 + colW, startY, colW, rowH, 0xDD111827, 0xFF3B82F6,
-                netStr, 0xFF60A5FA, 13, true);
+                netStr, 0xFF60A5FA, 12, true);
 
-        // Audio Toggle Button
+        // Audio Toggle
         float audioX = pad * 2 + colW * 2 + 6;
-        drawPill(canvas, audioX, startY, 44, rowH, 0xDD111827, 0xFF64748B,
-                sound.isSoundEnabled() ? "🔊" : "🔇", 0xFFFFFFFF, 16, true);
+        drawPill(canvas, audioX, startY, 42, rowH, 0xDD111827, 0xFF64748B,
+                sound.isSoundEnabled() ? "🔊" : "🔇", 0xFFFFFFFF, 15, true);
 
-        // Row 2: Wind, SP, Prestige, Time
-        float r2Y = startY + rowH + 6;
+        // Row 2: Wind, SP, Season, Biome
+        float r2Y = startY + rowH + 5;
         float subW = (w - pad * 5) / 4.0f;
 
-        // Wind
-        drawPill(canvas, pad, r2Y, subW, 28, 0xBB111827, 0,
-                String.format(Locale.US, "💨 %.1fм/с", engine.windSpeed), 0xFF38BDF8, 11, false);
+        drawPill(canvas, pad, r2Y, subW, 26, 0xBB111827, 0,
+                String.format(Locale.US, "💨 %.1fм/с", engine.windSpeed), 0xFF38BDF8, 10, false);
 
-        // Science
-        drawPill(canvas, pad * 2 + subW, r2Y, subW, 28, 0xBB111827, 0,
-                String.format(Locale.US, "🔬 %.1f SP", engine.sciencePoints), 0xFFA78BFA, 11, false);
+        drawPill(canvas, pad * 2 + subW, r2Y, subW, 26, 0xBB111827, 0,
+                String.format(Locale.US, "🔬 %.1f SP", engine.sciencePoints), 0xFFA78BFA, 10, false);
 
-        // Prestige
-        drawPill(canvas, pad * 3 + subW * 2, r2Y, subW, 28, 0xBB111827, 0,
-                "👑 R" + engine.prestigeCount + " x" + String.format(Locale.US, "%.1f", engine.prestigeMultiplier),
-                0xFFFBBF24, 11, false);
+        drawPill(canvas, pad * 3 + subW * 2, r2Y, subW, 26, 0xBB111827, 0,
+                engine.currentSeason.title, 0xFFFBBF24, 10, true);
 
-        // Time of Day
-        String timeStr = "☀️ День";
-        if (engine.timeOfDay > 0.75f || engine.timeOfDay < 0.25f) timeStr = "🌙 Ночь";
-        else if (engine.timeOfDay >= 0.25f && engine.timeOfDay < 0.35f) timeStr = "🌅 Рассвет";
-        else if (engine.timeOfDay >= 0.65f && engine.timeOfDay <= 0.75f) timeStr = "🌇 Закат";
+        drawPill(canvas, pad * 4 + subW * 3, r2Y, subW, 26, 0xBB111827, 0,
+                engine.currentBiome.title, engine.currentBiome.color, 10, true);
 
-        drawPill(canvas, pad * 4 + subW * 3, r2Y, subW, 28, 0xBB111827, 0,
-                timeStr, 0xFFCBD5E1, 11, false);
-
-        return r2Y + 28;
+        return r2Y + 26;
     }
 
     private void drawTurbineGrid(Canvas canvas, int w, float topY, float gridH) {
-        float pad = 10;
+        float pad = 8;
         float cellW = (w - pad * 4) / 3.0f;
         float cellH = (gridH - pad * 4) / 3.0f;
 
@@ -210,22 +246,37 @@ public class TycoonGameView extends View {
     private void drawPlotCell(Canvas canvas, int r, int c, float x, float y, float w, float h, boolean selected) {
         TurbinePlot plot = engine.plots[r][c];
 
-        // Background Pad
+        // Background Pad depending on Biome
         rectTemp.set(x, y, x + w, y + h);
-        pFill.setColor(selected ? 0xFF065F46 : 0xFF047857);
+        int padBg = selected ? 0xFF065F46 : 0xFF047857;
+        if (engine.currentBiome == Biome.OCEAN) {
+            padBg = selected ? 0xFF0E7490 : 0xFF155E75;
+        } else if (engine.currentBiome == Biome.PEAKS) {
+            padBg = selected ? 0xFF334155 : 0xFF1E293B;
+        } else if (engine.currentSeason == Season.WINTER) {
+            padBg = selected ? 0xFF94A3B8 : 0xFFCBD5E1;
+        }
+
+        pFill.setColor(padBg);
         canvas.drawRoundRect(rectTemp, 14, 14, pFill);
 
-        // Border
-        pStroke.setColor(selected ? 0xFF34D399 : 0x40FFFFFF);
-        pStroke.setStrokeWidth(selected ? 3.0f : 1.0f);
+        // Border (Flashing Red if Burning!)
+        if (plot.isBurning) {
+            long pt = System.currentTimeMillis();
+            pStroke.setColor(0xFFEF4444);
+            pStroke.setStrokeWidth(3.5f);
+        } else {
+            pStroke.setColor(selected ? 0xFF34D399 : 0x40FFFFFF);
+            pStroke.setStrokeWidth(selected ? 3.0f : 1.0f);
+        }
         canvas.drawRoundRect(rectTemp, 14, 14, pStroke);
 
         if (plot.isEmpty()) {
-            // Empty plot
             pText.setColor(0xEEFFFFFF);
-            pText.setTextSize(14);
+            pText.setTextSize(13);
             pText.setTextAlign(Paint.Align.CENTER);
-            canvas.drawText("➕ СТРОЙКА", x + w / 2, y + h / 2 - 2, pText);
+            String buildTxt = (engine.currentBiome == Biome.OCEAN) ? "➕ ШЕЛЬФ" : "➕ СТРОЙКА";
+            canvas.drawText(buildTxt, x + w / 2, y + h / 2 - 2, pText);
 
             pText.setColor(0xFF34D399);
             pText.setTextSize(11);
@@ -235,12 +286,21 @@ public class TycoonGameView extends View {
 
         // Active Turbine drawing
         float hubX = x + w / 2;
-        float hubY = y + h * 0.45f;
+        float hubY = y + h * 0.44f;
         float baseH = y + h - 8;
 
-        // Shadow under turbine
-        pFill.setColor(0x30000000);
-        canvas.drawOval(hubX - 22, baseH - 4, hubX + 22, baseH + 4, pFill);
+        // Offshore Marine Foundation / Jacket
+        if (plot.type == TurbineType.OFFSHORE || engine.currentBiome == Biome.OCEAN) {
+            pFill.setColor(0xFFFBBF24); // Steel yellow jacket
+            canvas.drawRect(hubX - 18, baseH - 4, hubX + 18, baseH + 2, pFill);
+            pStroke.setColor(0xFFD97706);
+            pStroke.setStrokeWidth(2.0f);
+            canvas.drawLine(hubX - 14, baseH, hubX - 8, baseH + 6, pStroke);
+            canvas.drawLine(hubX + 14, baseH, hubX + 8, baseH + 6, pStroke);
+        } else {
+            pFill.setColor(0x30000000);
+            canvas.drawOval(hubX - 20, baseH - 3, hubX + 20, baseH + 4, pFill);
+        }
 
         // Tower
         pFill.setColor(0xFFE2E8F0);
@@ -266,7 +326,6 @@ public class TycoonGameView extends View {
         pFill.setColor(0xFFFFFFFF);
 
         if (plot.type == TurbineType.QUANTUM_VAWT) {
-            // Vertical helical blades
             pFill.setColor(plot.type.color);
             for (int i = 0; i < 4; i++) {
                 canvas.save();
@@ -276,7 +335,6 @@ public class TycoonGameView extends View {
                 canvas.restore();
             }
         } else {
-            // 3 Aero blades
             for (int i = 0; i < 3; i++) {
                 canvas.save();
                 canvas.rotate(i * 120);
@@ -290,7 +348,6 @@ public class TycoonGameView extends View {
                 blade.close();
                 canvas.drawPath(blade, pFill);
 
-                // Vibrant wing tip color
                 pFill.setColor(plot.type.color);
                 canvas.drawCircle(0, -bladeLen * 0.92f, 2.2f, pFill);
                 pFill.setColor(0xFFFFFFFF);
@@ -299,7 +356,7 @@ public class TycoonGameView extends View {
             }
         }
 
-        // Hub center cap
+        // Center cap
         pFill.setColor(0xFF1E293B);
         canvas.drawCircle(0, 0, 4.5f, pFill);
         canvas.restore();
@@ -307,7 +364,7 @@ public class TycoonGameView extends View {
         // Level pill (top left)
         drawMiniBadge(canvas, x + 6, y + 6, "Lv." + plot.level, 0xFF1E293B, 0xFF60A5FA);
 
-        // Health bar (bottom)
+        // Health bar
         float barW = w - 16;
         float barH = 5;
         float barX = x + 8;
@@ -321,29 +378,34 @@ public class TycoonGameView extends View {
         pFill.setColor(plot.condition > 50 ? 0xFF10B981 : (plot.condition > 20 ? 0xFFF59E0B : 0xFFEF4444));
         canvas.drawRoundRect(rectTemp, 3, 3, pFill);
 
-        // Warning indicator if broken
-        if (plot.isBroken) {
-            drawMiniBadge(canvas, x + w - 46, y + 6, "⚠️ СЛОМАН", 0xFF991B1B, 0xFFFCA5A5);
+        // Warnings: Broken or Fire
+        if (plot.isBurning) {
+            pFill.setColor(0xCCEF4444);
+            canvas.drawCircle(hubX, hubY, 15, pFill);
+            pFill.setColor(0xFFFBBF24);
+            canvas.drawCircle(hubX, hubY, 8, pFill);
+            drawMiniBadge(canvas, x + w - 52, y + 6, "🔥 ПОЖАР!", 0xFFB91C1C, 0xFFFEE2E2);
+        } else if (plot.isBroken) {
+            drawMiniBadge(canvas, x + w - 50, y + 6, "⚠️ СЛОМАН", 0xFF991B1B, 0xFFFCA5A5);
         }
     }
 
     private void drawBottomPanel(Canvas canvas, int w, int h, float panelY, float panelH) {
-        // Dark panel background
         rectTemp.set(0, panelY, w, h);
         pFill.setColor(0xFF0F172A);
         canvas.drawRoundRect(rectTemp, 20, 20, pFill);
 
-        // Tab Selector Header
-        float tabH = 42;
+        // Tabs Header
+        float tabH = 38;
         float tabW = w / 4.0f;
         Tab[] tabs = Tab.values();
-        String[] tabNames = {"🏗️ Стройка", "📈 Биржа", "🔬 Наука", "👑 Престиж"};
+        String[] tabNames = {"🏗️ Стройка", "📈 Биржа", "🔬 Штаб", "👑 Престиж"};
 
         for (int i = 0; i < tabs.length; i++) {
             boolean active = (tabs[i] == currentTab);
             float tx = i * tabW;
 
-            rectTemp.set(tx + 2, panelY + 4, tx + tabW - 2, panelY + tabH - 2);
+            rectTemp.set(tx + 2, panelY + 3, tx + tabW - 2, panelY + tabH - 2);
             pFill.setColor(active ? 0xFF1E293B : 0x00000000);
             canvas.drawRoundRect(rectTemp, 8, 8, pFill);
 
@@ -354,16 +416,16 @@ public class TycoonGameView extends View {
             }
 
             pText.setColor(active ? 0xFF38BDF8 : 0xFF94A3B8);
-            pText.setTextSize(13);
+            pText.setTextSize(12);
             pText.setTextAlign(Paint.Align.CENTER);
             pText.setFakeBoldText(active);
             canvas.drawText(tabNames[i], tx + tabW / 2, panelY + tabH / 2 + 4, pText);
             pText.setFakeBoldText(false);
         }
 
-        // Tab Content Area
-        float contentY = panelY + tabH + 6;
-        float contentH = panelH - tabH - 34; // leave 34px for bottom log ticker
+        // Tab Content
+        float contentY = panelY + tabH + 4;
+        float contentH = panelH - tabH - 30;
 
         switch (currentTab) {
             case BUILD:
@@ -383,17 +445,35 @@ public class TycoonGameView extends View {
 
     private void drawBuildTab(Canvas canvas, int w, float y, float h) {
         TurbinePlot plot = engine.plots[selectedRow][selectedCol];
-        float pad = 12;
+        float pad = 10;
+
+        // Top Row: Biome Bar (Valley, Peaks, Ocean)
+        float bioH = 26;
+        float bioW = (w - pad * 4) / 3.0f;
+        Biome[] biomes = Biome.values();
+        for (int i = 0; i < biomes.length; i++) {
+            Biome b = biomes[i];
+            float bx = pad + i * (bioW + pad);
+            boolean isCur = (engine.currentBiome == b);
+            boolean isUnlocked = engine.unlockedBiomes[i];
+
+            String bTitle = b.title.split(" ")[0];
+            String bSub = isCur ? "АКТИВЕН" : (isUnlocked ? "ВЫБРАТЬ" : "$" + (int) (b.unlockCost / 1000) + "k");
+            drawActionButton(canvas, bx, y, bioW, bioH, bTitle + " (" + bSub + ")", "",
+                    isCur ? 0xFF0284C7 : (isUnlocked ? 0xFF1E293B : 0xFF334155),
+                    isCur ? 0xFF38BDF8 : 0xFF64748B);
+        }
+
+        float afterBioY = y + bioH + 6;
 
         if (plot.isEmpty()) {
-            // Show Build options for empty plot
             pText.setColor(0xFFE2E8F0);
-            pText.setTextSize(14);
+            pText.setTextSize(13);
             pText.setTextAlign(Paint.Align.LEFT);
-            canvas.drawText("Выберите ветряк для участка [" + (selectedRow + 1) + "," + (selectedCol + 1) + "]:", pad, y + 16, pText);
+            canvas.drawText("Постройка на участке [" + (selectedRow + 1) + "," + (selectedCol + 1) + "]:", pad, afterBioY + 14, pText);
 
-            float btnY = y + 26;
-            float btnH = (h - 36) / 3.0f;
+            float btnY = afterBioY + 20;
+            float btnH = (h - bioH - 26) / 3.0f;
             float btnW = (w - pad * 3) / 2.0f;
 
             TurbineType[] types = TurbineType.values();
@@ -401,11 +481,11 @@ public class TycoonGameView extends View {
                 int col = i % 2;
                 int row = i / 2;
                 float bx = pad + col * (btnW + pad);
-                float by = btnY + row * (btnH + 4);
+                float by = btnY + row * (btnH + 3);
 
                 TurbineType tt = types[i];
                 boolean canAfford = engine.balance >= tt.baseCost;
-                drawActionButton(canvas, bx, by, btnW, btnH - 4,
+                drawActionButton(canvas, bx, by, btnW, btnH - 3,
                         tt.title + " ($" + (int) tt.baseCost + ")",
                         String.format(Locale.US, "+%.0f кВт", tt.baseKW),
                         canAfford ? 0xFF059669 : 0xFF334155, canAfford ? 0xFF10B981 : 0xFF64748B);
@@ -413,82 +493,79 @@ public class TycoonGameView extends View {
             return;
         }
 
-        // Active Plot Actions (Upgrade, Evolve, Repair)
+        // Active Plot Actions
         pText.setColor(0xFFF8FAFC);
-        pText.setTextSize(14);
+        pText.setTextSize(13);
         pText.setTextAlign(Paint.Align.LEFT);
         pText.setFakeBoldText(true);
-        canvas.drawText(plot.type.title + " [Lv." + plot.level + "] на участке [" + (selectedRow + 1) + "," + (selectedCol + 1) + "]", pad, y + 16, pText);
+        canvas.drawText(plot.type.title + " [Lv." + plot.level + "] (Участок " + (selectedRow + 1) + "," + (selectedCol + 1) + ")", pad, afterBioY + 12, pText);
         pText.setFakeBoldText(false);
 
-        float kw = plot.getOutputKW(engine.windSpeed, ResearchItem.BLADE_AERO.unlocked ? 1.2f : 1.0f);
-        pText.setColor(0xFF94A3B8);
-        pText.setTextSize(12);
-        canvas.drawText(String.format(Locale.US, "Выработка: %.1f кВт | Состояние: %.1f%%", kw, plot.condition), pad, y + 34, pText);
-
-        // Buttons
-        float bY = y + 44;
-        float bH = 46;
+        // Buttons Grid
+        float bY = afterBioY + 20;
+        float bH = 38;
         float bW = (w - pad * 3) / 2.0f;
 
         // Button 1: Upgrade Level
         boolean canUp = (plot.level < 10) && (engine.balance >= plot.getUpgradeCost());
         String upTitle = (plot.level >= 10) ? "МАКС УРОВЕНЬ" : "Улучшить Lv." + (plot.level + 1);
-        String upSub = (plot.level >= 10) ? "Достигнут максимум" : "Цена: $" + formatNumber(plot.getUpgradeCost());
+        String upSub = (plot.level >= 10) ? "Максимум" : "$" + formatNumber(plot.getUpgradeCost());
         drawActionButton(canvas, pad, bY, bW, bH, upTitle, upSub,
                 canUp ? 0xFF2563EB : 0xFF1E293B, canUp ? 0xFF3B82F6 : 0xFF475569);
 
-        // Button 2: Evolution (Upgrade to next model)
+        // Button 2: Evolution
         TurbineType next = plot.getNextEvolutionType();
         boolean canEvolve = plot.canEvolve() && (engine.balance >= plot.getEvolutionCost());
         String evoTitle = (next != null) ? "⚡ Эволюция: " + next.title : "ФИНАЛЬНАЯ МОДЕЛЬ";
-        String evoSub = (next != null) ? "Цена: $" + formatNumber(plot.getEvolutionCost()) : "Высший тир";
+        String evoSub = (next != null) ? "$" + formatNumber(plot.getEvolutionCost()) : "Высший тир";
         drawActionButton(canvas, pad * 2 + bW, bY, bW, bH, evoTitle, evoSub,
                 canEvolve ? 0xFFD97706 : 0xFF1E293B, canEvolve ? 0xFFF59E0B : 0xFF475569);
 
-        // Row 2 of buttons: Repair & Tech support
-        float b2Y = bY + bH + 8;
-        boolean canRepair = (plot.condition < 100.0f) && (engine.balance >= plot.getRepairCost());
-        String repTitle = (plot.condition >= 100.0f) ? "Турбина исправна" : "Починить";
-        String repSub = (plot.condition >= 100.0f) ? "100%" : "Цена: $" + formatNumber(plot.getRepairCost());
+        // Row 2: Repair Single & Repair ALL (-15%)
+        float b2Y = bY + bH + 6;
+        boolean canRepair = (plot.condition < 100.0f || plot.isBurning) && (engine.balance >= plot.getRepairCost());
+        String repTitle = plot.isBurning ? "🧯 Потушить!" : (plot.condition >= 100.0f ? "Исправен" : "Починить");
+        String repSub = "$" + formatNumber(plot.getRepairCost());
         drawActionButton(canvas, pad, b2Y, bW, bH, repTitle, repSub,
                 canRepair ? 0xFF059669 : 0xFF1E293B, canRepair ? 0xFF10B981 : 0xFF475569);
 
-        // Button: Hire Tech
-        String techTitle = engine.hasTechSupport ? "Техник: Нанят" : "Нанять техника";
-        String techSub = engine.hasTechSupport ? "-$1/с (износ -60%)" : "$250 (-$1/с)";
-        drawActionButton(canvas, pad * 2 + bW, b2Y, bW, bH, techTitle, techSub,
-                engine.hasTechSupport ? 0xFF0D9488 : 0xFF0284C7, 0xFF14B8A6);
+        // Repair ALL with wholesale discount
+        drawActionButton(canvas, pad * 2 + bW, b2Y, bW, bH, "🛠️ ПОЧИНИТЬ ВСЁ", "Скидка 15%",
+                0xFF0D9488, 0xFF14B8A6);
     }
 
     private void drawMarketTab(Canvas canvas, int w, float y, float h) {
-        float pad = 12;
+        float pad = 10;
 
         pText.setColor(0xFFF8FAFC);
-        pText.setTextSize(15);
+        pText.setTextSize(14);
         pText.setTextAlign(Paint.Align.LEFT);
         pText.setFakeBoldText(true);
-        canvas.drawText("⚡ Энергетическая Биржа & Контракты", pad, y + 16, pText);
+        canvas.drawText("⚡ Биржа электроэнергии & Метеосводка", pad, y + 14, pText);
         pText.setFakeBoldText(false);
 
-        // Live Market Price Card
-        float cardY = y + 26;
-        float cardH = 50;
+        // Market Price & Forecast Card
+        float cardY = y + 22;
+        float cardH = 46;
         rectTemp.set(pad, cardY, w - pad, cardY + cardH);
         pFill.setColor(0xFF1E293B);
         canvas.drawRoundRect(rectTemp, 10, 10, pFill);
 
         pText.setColor(0xFF38BDF8);
-        pText.setTextSize(14);
-        canvas.drawText(String.format(Locale.US, "Текущая цена: $%.3f / кВт·ч", engine.marketPrice), pad + 12, cardY + 22, pText);
+        pText.setTextSize(13);
+        canvas.drawText(String.format(Locale.US, "Тариф: $%.3f/кВт·ч | Спрос: %s",
+                engine.marketPrice, (engine.marketPrice > 0.4f ? "🔥 ПИК" : "Обычный")), pad + 10, cardY + 18, pText);
 
-        pText.setColor(0xFF94A3B8);
-        pText.setTextSize(12);
-        canvas.drawText("Спрос города: " + (engine.marketPrice > 0.4f ? "🔥 Высокий (Пик!)" : "Обычный"), pad + 12, cardY + 40, pText);
+        pText.setColor(0xFFFBBF24);
+        pText.setTextSize(11);
+        String foreStr = ResearchItem.METEOROLOGIST.unlocked ?
+                "📡 Прогноз: " + engine.weatherForecast + " (" + engine.forecastSeconds + "с)" :
+                "📡 Назначьте Метеоролога в Штабе для прогноза";
+        canvas.drawText(foreStr, pad + 10, cardY + 36, pText);
 
         // Contract Card
-        float contY = cardY + cardH + 10;
-        float contH = 80;
+        float contY = cardY + cardH + 8;
+        float contH = 75;
         rectTemp.set(pad, contY, w - pad, contY + contH);
         pFill.setColor(0xFF1E1B4B);
         canvas.drawRoundRect(rectTemp, 12, 12, pFill);
@@ -499,74 +576,72 @@ public class TycoonGameView extends View {
         if (engine.currentContract != null) {
             Contract c = engine.currentContract;
             pText.setColor(0xFFC7D2FE);
-            pText.setTextSize(13);
+            pText.setTextSize(12);
             pText.setFakeBoldText(true);
-            canvas.drawText("📋 " + c.title, pad + 12, contY + 22, pText);
+            canvas.drawText("📋 " + c.title, pad + 10, contY + 20, pText);
             pText.setFakeBoldText(false);
 
             pText.setColor(0xFFFBBF24);
-            pText.setTextSize(12);
-            canvas.drawText("Награда: +$" + (int) c.reward + " | Нужно: " + (int) c.targetKW + " кВт", pad + 12, contY + 42, pText);
+            pText.setTextSize(11);
+            canvas.drawText("Награда: +$" + (int) c.reward + " | Цель: " + (int) c.targetKW + " кВт", pad + 10, contY + 38, pText);
 
-            // Progress bar
-            float prgW = (w - pad * 2 - 24);
+            float prgW = (w - pad * 2 - 20);
             float currentKW = engine.getTotalOutputKW();
             float ratio = Math.min(1.0f, currentKW / c.targetKW);
 
-            rectTemp.set(pad + 12, contY + 52, pad + 12 + prgW, contY + 62);
+            rectTemp.set(pad + 10, contY + 48, pad + 10 + prgW, contY + 56);
             pFill.setColor(0x60000000);
             canvas.drawRoundRect(rectTemp, 4, 4, pFill);
 
-            rectTemp.set(pad + 12, contY + 52, pad + 12 + prgW * ratio, contY + 62);
+            rectTemp.set(pad + 10, contY + 48, pad + 10 + prgW * ratio, contY + 56);
             pFill.setColor(0xFF10B981);
             canvas.drawRoundRect(rectTemp, 4, 4, pFill);
 
             pText.setColor(0xFFE2E8F0);
-            pText.setTextSize(11);
-            canvas.drawText(String.format(Locale.US, "%.0f / %.0f кВт (Осталось: %.0fc)", currentKW, c.targetKW, c.remainingSeconds), pad + 12, contY + 74, pText);
+            pText.setTextSize(10);
+            canvas.drawText(String.format(Locale.US, "%.0f / %.0f кВт (Осталось: %.0fc)", currentKW, c.targetKW, c.remainingSeconds), pad + 10, contY + 68, pText);
         }
     }
 
     private void drawScienceTab(Canvas canvas, int w, float y, float h) {
-        float pad = 12;
+        float pad = 10;
 
         pText.setColor(0xFFF8FAFC);
-        pText.setTextSize(15);
+        pText.setTextSize(14);
         pText.setTextAlign(Paint.Align.LEFT);
         pText.setFakeBoldText(true);
-        canvas.drawText("🔬 Научно-исследовательская лаборатория (R&D)", pad, y + 16, pText);
+        canvas.drawText("🔬 Штаб Специалистов & Лаборатория (R&D)", pad, y + 14, pText);
         pText.setFakeBoldText(false);
 
-        float itemY = y + 26;
-        float itemH = (h - 32) / 4.0f;
-
+        float itemY = y + 20;
         ResearchItem[] items = ResearchItem.values();
-        for (int i = 0; i < items.length; i++) {
+        float itemH = (h - 24) / Math.min(5, items.length);
+
+        for (int i = 0; i < Math.min(5, items.length); i++) {
             ResearchItem res = items[i];
             float iy = itemY + i * itemH;
 
-            rectTemp.set(pad, iy, w - pad, iy + itemH - 4);
+            rectTemp.set(pad, iy, w - pad, iy + itemH - 3);
             pFill.setColor(res.unlocked ? 0xFF064E3B : 0xFF1E293B);
             canvas.drawRoundRect(rectTemp, 8, 8, pFill);
 
             pText.setColor(res.unlocked ? 0xFF34D399 : 0xFFE2E8F0);
-            pText.setTextSize(13);
+            pText.setTextSize(12);
             pText.setFakeBoldText(true);
-            canvas.drawText(res.icon + " " + res.title, pad + 10, iy + 18, pText);
+            canvas.drawText(res.icon + " " + res.title, pad + 8, iy + 16, pText);
             pText.setFakeBoldText(false);
 
             pText.setColor(0xFF94A3B8);
-            pText.setTextSize(11);
-            canvas.drawText(res.description, pad + 10, iy + 33, pText);
+            pText.setTextSize(10);
+            canvas.drawText(res.description, pad + 8, iy + 30, pText);
 
-            // Unlock button on the right
-            float btnW = 90;
-            float btnH = itemH - 12;
-            float btnX = w - pad - btnW - 6;
-            float btnY = iy + 4;
+            float btnW = 85;
+            float btnH = itemH - 8;
+            float btnX = w - pad - btnW - 4;
+            float btnY = iy + 2;
 
             boolean canUnlock = (!res.unlocked) && (engine.sciencePoints >= res.costSP);
-            String btnText = res.unlocked ? "ИЗУЧЕНО" : (int) res.costSP + " SP";
+            String btnText = res.unlocked ? "АКТИВЕН" : (int) res.costSP + " SP";
             drawActionButton(canvas, btnX, btnY, btnW, btnH, btnText, "",
                     res.unlocked ? 0xFF047857 : (canUnlock ? 0xFF7C3AED : 0xFF334155),
                     res.unlocked ? 0xFF10B981 : (canUnlock ? 0xFFA78BFA : 0xFF64748B));
@@ -574,35 +649,35 @@ public class TycoonGameView extends View {
     }
 
     private void drawPrestigeTab(Canvas canvas, int w, float y, float h) {
-        float pad = 12;
+        float pad = 10;
 
         pText.setColor(0xFFFBBF24);
-        pText.setTextSize(16);
+        pText.setTextSize(15);
         pText.setTextAlign(Paint.Align.LEFT);
         pText.setFakeBoldText(true);
-        canvas.drawText("👑 Престиж / IPO Энергохолдинга", pad, y + 20, pText);
-        pText.setFakeBoldText(false);
-
-        pText.setColor(0xFFE2E8F0);
-        pText.setTextSize(13);
-        canvas.drawText("Сбросьте ферму, чтобы получить постоянный множитель:", pad, y + 42, pText);
-
-        pText.setColor(0xFF34D399);
-        pText.setTextSize(15);
-        pText.setFakeBoldText(true);
-        canvas.drawText("Текущий бонус: x" + String.format(Locale.US, "%.1f", engine.prestigeMultiplier) + " ➔ Будет: x" + String.format(Locale.US, "%.1f", engine.prestigeMultiplier + 0.5), pad, y + 66, pText);
+        canvas.drawText("👑 Престиж / IPO & Сохранения", pad, y + 16, pText);
         pText.setFakeBoldText(false);
 
         // Rebirth Button
         boolean canRebirth = engine.balance >= 100000.0;
-        float btnY = y + 84;
+        float btnY = y + 26;
         float btnW = w - pad * 2;
-        float btnH = 55;
+        float btnH = 46;
 
-        String title = canRebirth ? "👑 СОВЕРШИТЬ ПРЕСТИЖ (+50% ДОХОДА)" : "НУЖНО $100,000 ДЛЯ ПРЕСТИЖА";
-        String sub = canRebirth ? "Баланс будет сброшен, множитель навсегда останется!" : "Текущий баланс: $" + formatNumber(engine.balance);
+        String title = canRebirth ? "👑 СОВЕРШИТЬ ПРЕСТИЖ (+50% ДОХОДА)" : "ТРЕБУЕТСЯ $100,000 ДЛЯ ПРЕСТИЖА";
+        String sub = "Текущий бонус: x" + String.format(Locale.US, "%.1f", engine.prestigeMultiplier);
         drawActionButton(canvas, pad, btnY, btnW, btnH, title, sub,
                 canRebirth ? 0xFFD97706 : 0xFF1E293B, canRebirth ? 0xFFF59E0B : 0xFF475569);
+
+        // Export & Import Save Code Buttons
+        float b2Y = btnY + btnH + 10;
+        float halfW = (btnW - pad) / 2.0f;
+
+        drawActionButton(canvas, pad, b2Y, halfW, 40, "📋 ЭКСПОРТ КОДА", "В буфер обмена",
+                0xFF0284C7, 0xFF38BDF8);
+
+        drawActionButton(canvas, pad + halfW + pad, b2Y, halfW, 40, "📥 ИМПОРТ ИЗ БУФЕРА", "Загрузить",
+                0xFF7C3AED, 0xFFA78BFA);
     }
 
     private void drawActionButton(Canvas canvas, float x, float y, float w, float h, String title, String sub, int bg, int border) {
@@ -615,7 +690,7 @@ public class TycoonGameView extends View {
         canvas.drawRoundRect(rectTemp, 8, 8, pStroke);
 
         pText.setColor(0xFFFFFFFF);
-        pText.setTextSize(12);
+        pText.setTextSize(11);
         pText.setTextAlign(Paint.Align.CENTER);
         pText.setFakeBoldText(true);
 
@@ -624,7 +699,7 @@ public class TycoonGameView extends View {
         } else {
             canvas.drawText(title, x + w / 2, y + h * 0.42f, pText);
             pText.setColor(0xFFCBD5E1);
-            pText.setTextSize(10);
+            pText.setTextSize(9);
             pText.setFakeBoldText(false);
             canvas.drawText(sub, x + w / 2, y + h * 0.78f, pText);
         }
@@ -634,12 +709,12 @@ public class TycoonGameView extends View {
     private void drawPill(Canvas canvas, float x, float y, float w, float h, int bg, int border, String text, int textColor, float textSize, boolean bold) {
         rectTemp.set(x, y, x + w, y + h);
         pFill.setColor(bg);
-        canvas.drawRoundRect(rectTemp, 10, 10, pFill);
+        canvas.drawRoundRect(rectTemp, 8, 8, pFill);
 
         if (border != 0) {
             pStroke.setColor(border);
             pStroke.setStrokeWidth(1.2f);
-            canvas.drawRoundRect(rectTemp, 10, 10, pStroke);
+            canvas.drawRoundRect(rectTemp, 8, 8, pStroke);
         }
 
         pText.setColor(textColor);
@@ -668,7 +743,7 @@ public class TycoonGameView extends View {
         for (GameEngine.FloatingText ft : engine.floatingTexts) {
             pText.setColor(ft.color);
             pText.setAlpha((int) (ft.alpha * 255));
-            pText.setTextSize(16);
+            pText.setTextSize(15);
             pText.setFakeBoldText(true);
             pText.setTextAlign(Paint.Align.CENTER);
             canvas.drawText(ft.text, ft.x, ft.y, pText);
@@ -678,17 +753,17 @@ public class TycoonGameView extends View {
     }
 
     private void drawEventLogTicker(Canvas canvas, int w, int h) {
-        float barY = h - 26;
+        float barY = h - 24;
         rectTemp.set(0, barY, w, h);
         pFill.setColor(0xFF020617);
         canvas.drawRect(rectTemp, pFill);
 
         pText.setColor(0xFF94A3B8);
-        pText.setTextSize(11);
+        pText.setTextSize(10);
         pText.setTextAlign(Paint.Align.LEFT);
 
         String msg = engine.eventLog.isEmpty() ? "Добро пожаловать в Wind Turbine Tycoon!" : engine.eventLog.get(0);
-        canvas.drawText("📢 " + msg, 12, barY + 17, pText);
+        canvas.drawText("📢 " + msg, 10, barY + 16, pText);
     }
 
     @Override
@@ -700,20 +775,20 @@ public class TycoonGameView extends View {
         int w = getWidth();
         int h = getHeight();
 
-        // 1. Audio Button tap
-        float pad = 10;
-        float rowH = 38;
-        float colW = (w - pad * 3 - 50) / 2.0f;
+        // 1. Audio Button
+        float pad = 8;
+        float rowH = 34;
+        float colW = (w - pad * 3 - 48) / 2.0f;
         float audioX = pad * 2 + colW * 2 + 6;
-        if (x >= audioX && x <= audioX + 44 && y >= 32 && y <= 32 + rowH) {
+        if (x >= audioX && x <= audioX + 42 && y >= 30 && y <= 30 + rowH) {
             sound.toggleSound();
             return true;
         }
 
-        // 2. Tab Selection
-        float tabAreaHeight = h * 0.38f;
+        // 2. Tabs
+        float tabAreaHeight = h * 0.42f;
         float panelY = h - tabAreaHeight;
-        float tabH = 42;
+        float tabH = 38;
         if (y >= panelY && y <= panelY + tabH) {
             int tabIndex = (int) (x / (w / 4.0f));
             if (tabIndex >= 0 && tabIndex < Tab.values().length) {
@@ -723,8 +798,8 @@ public class TycoonGameView extends View {
             }
         }
 
-        // 3. Grid Taps (select plot or manual click boost)
-        float gridTop = 32 + rowH + 6 + 28 + 12;
+        // 3. Grid Taps
+        float gridTop = 30 + rowH + 5 + 26 + 10;
         float gridHeight = h - gridTop - tabAreaHeight;
         if (y >= gridTop && y <= gridTop + gridHeight) {
             float cellW = (w - pad * 4) / 3.0f;
@@ -738,9 +813,9 @@ public class TycoonGameView extends View {
                     if (x >= cx && x <= cx + cellW && y >= cy && y <= cy + cellH) {
                         selectedRow = r;
                         selectedCol = c;
-                        currentTab = Tab.BUILD; // switch to build tab to see actions
+                        currentTab = Tab.BUILD;
 
-                        // If active turbine, trigger manual click energy boost!
+                        // Tap turbine (extinguishes if burning or boosts energy)
                         if (!engine.plots[r][c].isEmpty()) {
                             engine.tapTurbine(r, c, x, y);
                         } else {
@@ -752,23 +827,37 @@ public class TycoonGameView extends View {
             }
         }
 
-        // 4. Tab Action Buttons Taps
-        if (y > panelY + tabH && y < h - 26) {
-            handleTabActionClick(x, y, panelY + tabH + 6, tabAreaHeight - tabH - 34, w);
+        // 4. Tab Actions
+        if (y > panelY + tabH && y < h - 24) {
+            handleTabActionClick(x, y, panelY + tabH + 4, tabAreaHeight - tabH - 30, w);
         }
 
         return true;
     }
 
     private void handleTabActionClick(float x, float y, float contentY, float contentH, int w) {
-        float pad = 12;
+        float pad = 10;
         TurbinePlot plot = engine.plots[selectedRow][selectedCol];
 
         if (currentTab == Tab.BUILD) {
+            // Biome Buttons tap
+            float bioH = 26;
+            float bioW = (w - pad * 4) / 3.0f;
+            if (y >= contentY && y <= contentY + bioH) {
+                for (int i = 0; i < 3; i++) {
+                    float bx = pad + i * (bioW + pad);
+                    if (x >= bx && x <= bx + bioW) {
+                        engine.selectBiome(Biome.values()[i]);
+                        return;
+                    }
+                }
+            }
+
+            float afterBioY = contentY + bioH + 6;
+
             if (plot.isEmpty()) {
-                // Building options
-                float btnY = contentY + 26;
-                float btnH = (contentH - 36) / 3.0f;
+                float btnY = afterBioY + 20;
+                float btnH = (contentH - bioH - 26) / 3.0f;
                 float btnW = (w - pad * 3) / 2.0f;
 
                 TurbineType[] types = TurbineType.values();
@@ -776,7 +865,7 @@ public class TycoonGameView extends View {
                     int col = i % 2;
                     int row = i / 2;
                     float bx = pad + col * (btnW + pad);
-                    float by = btnY + row * (btnH + 4);
+                    float by = btnY + row * (btnH + 3);
 
                     if (x >= bx && x <= bx + btnW && y >= by && y <= by + btnH) {
                         engine.buildTurbine(selectedRow, selectedCol, types[i]);
@@ -784,9 +873,8 @@ public class TycoonGameView extends View {
                     }
                 }
             } else {
-                // Upgrade, Evolve, Repair
-                float bY = contentY + 44;
-                float bH = 46;
+                float bY = afterBioY + 20;
+                float bH = 38;
                 float bW = (w - pad * 3) / 2.0f;
 
                 // Upgrade Button
@@ -801,35 +889,30 @@ public class TycoonGameView extends View {
                     return;
                 }
 
-                // Repair Button
-                float b2Y = bY + bH + 8;
+                // Row 2: Repair Single & Repair ALL (-15%)
+                float b2Y = bY + bH + 6;
                 if (x >= pad && x <= pad + bW && y >= b2Y && y <= b2Y + bH) {
                     engine.repairTurbine(selectedRow, selectedCol);
                     return;
                 }
 
-                // Tech Support Toggle
+                // Repair All Button
                 if (x >= pad * 2 + bW && x <= pad * 2 + bW * 2 && y >= b2Y && y <= b2Y + bH) {
-                    if (!engine.hasTechSupport && engine.balance >= 250) {
-                        engine.balance -= 250;
-                        engine.hasTechSupport = true;
-                        sound.playSound("coin");
-                        engine.addLog("👷 Нанята сервисная бригада техников!");
-                    }
+                    engine.repairAllTurbines();
                     return;
                 }
             }
         } else if (currentTab == Tab.SCIENCE) {
-            float itemY = contentY + 26;
-            float itemH = (contentH - 32) / 4.0f;
+            float itemY = contentY + 20;
             ResearchItem[] items = ResearchItem.values();
+            float itemH = (contentH - 24) / Math.min(5, items.length);
 
-            for (int i = 0; i < items.length; i++) {
+            for (int i = 0; i < Math.min(5, items.length); i++) {
                 float iy = itemY + i * itemH;
-                float btnW = 90;
-                float btnH = itemH - 12;
-                float btnX = w - pad - btnW - 6;
-                float btnY = iy + 4;
+                float btnW = 85;
+                float btnH = itemH - 8;
+                float btnX = w - pad - btnW - 4;
+                float btnY = iy + 2;
 
                 if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
                     engine.unlockResearch(items[i]);
@@ -837,12 +920,42 @@ public class TycoonGameView extends View {
                 }
             }
         } else if (currentTab == Tab.PRESTIGE) {
-            float btnY = contentY + 84;
+            float btnY = contentY + 26;
             float btnW = w - pad * 2;
-            float btnH = 55;
+            float btnH = 46;
 
+            // Rebirth
             if (x >= pad && x <= pad + btnW && y >= btnY && y <= btnY + btnH) {
                 engine.triggerPrestige();
+                return;
+            }
+
+            // Export & Import
+            float b2Y = btnY + btnH + 10;
+            float halfW = (btnW - pad) / 2.0f;
+
+            // Export to Clipboard
+            if (x >= pad && x <= pad + halfW && y >= b2Y && y <= b2Y + 40) {
+                ClipboardManager cm = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    ClipData clip = ClipData.newPlainText("WindTycoonSave", engine.exportSaveCode());
+                    cm.setPrimaryClip(clip);
+                    engine.addLog("📋 Код сохранения скопирован в буфер обмена!");
+                    sound.playSound("coin");
+                }
+                return;
+            }
+
+            // Import from Clipboard
+            if (x >= pad + halfW + pad && x <= pad + btnW && y >= b2Y && y <= b2Y + 40) {
+                ClipboardManager cm = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0) {
+                    CharSequence text = cm.getPrimaryClip().getItemAt(0).getText();
+                    if (text != null) {
+                        boolean ok = engine.importSaveCode(text.toString());
+                        if (ok) sound.playSound("upgrade");
+                    }
+                }
             }
         }
     }

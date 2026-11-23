@@ -9,7 +9,13 @@ namespace WindTycoonLauncher {
         static void Main() {
             try {
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                string jarPath = Path.Combine(baseDir, "WindTycoon.jar");
+                string jarPath = Path.Combine(baseDir, "WindTycoonApp.jar");
+                if (!File.Exists(jarPath)) {
+                    jarPath = Path.Combine(baseDir, "WindTycoon.jar");
+                }
+                if (!File.Exists(jarPath)) {
+                    jarPath = Path.Combine(baseDir, "app", "WindTycoonApp.jar");
+                }
                 if (!File.Exists(jarPath)) {
                     jarPath = Path.Combine(baseDir, "app", "WindTycoon.jar");
                 }

@@ -10,6 +10,8 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
+import java.awt.datatransfer.StringSelection;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -259,6 +261,7 @@ public class WindTycoon extends JFrame {
         double durability = 100.0;
         double bladeAngle = 0.0;
         int level = 1;
+        boolean isBurning = false;
 
         Plot(int c, int r) {
             this.col = c;
@@ -364,6 +367,88 @@ public class WindTycoon extends JFrame {
     }
 
     // ==========================================
+    // === 2.1 ВРЕМЕНА ГОДА И БИОМЫ
+    // ==========================================
+    public enum Season {
+        SPRING("🌸 Весна", new Color(46, 204, 113), new Color(39, 174, 96), 1.0, 1.0, "Мягкий климат: износ снижен на 20%"),
+        SUMMER("☀️ Лето", new Color(60, 179, 113), new Color(40, 140, 90), 0.95, 1.5, "Солнечный зной: гибридные турбины +50% энергии"),
+        AUTUMN("🍁 Осень", new Color(205, 120, 45), new Color(145, 80, 25), 1.25, 0.9, "Сезон ветров: скорость ветра +25%"),
+        WINTER("❄️ Зима", new Color(225, 238, 252), new Color(180, 205, 230), 1.1, 1.0, "Морозный пик: тариф города x1.35 за отопление");
+
+        final String title;
+        final Color groundTop;
+        final Color groundBot;
+        final double windFactor;
+        final double solarFactor;
+        final String desc;
+
+        Season(String title, Color groundTop, Color groundBot, double windFactor, double solarFactor, String desc) {
+            this.title = title;
+            this.groundTop = groundTop;
+            this.groundBot = groundBot;
+            this.windFactor = windFactor;
+            this.solarFactor = solarFactor;
+            this.desc = desc;
+        }
+    }
+
+    public enum Biome {
+        VALLEY("🌲 Долина", "Классическая равнина, умеренный климат", 0.0, 1.0, 1.0),
+        PEAKS("🏔️ Перевал", "Горы: сильный ветер (+35%), скалы", 15000.0, 1.35, 1.15),
+        OCEAN("🌊 Шельф", "Океан: морской бриз, Офшор турбины +50%", 35000.0, 1.15, 1.4);
+
+        final String title;
+        final String desc;
+        final double unlockCost;
+        final double windModifier;
+        final double incomeModifier;
+
+        Biome(String title, String desc, double unlockCost, double windModifier, double incomeModifier) {
+            this.title = title;
+            this.desc = desc;
+            this.unlockCost = unlockCost;
+            this.windModifier = windModifier;
+            this.incomeModifier = incomeModifier;
+        }
+    }
+
+    private static class SnowFlake {
+        double x, y, speed, size;
+        double sway, swaySpeed;
+        SnowFlake(double x, double y, double speed, double size) {
+            this.x = x;
+            this.y = y;
+            this.speed = speed;
+            this.size = size;
+            this.sway = Math.random() * Math.PI * 2;
+            this.swaySpeed = 0.02 + Math.random() * 0.03;
+        }
+    }
+
+    private static class SmokeParticle {
+        double x, y, vx, vy;
+        float alpha = 0.85f;
+        float size;
+        boolean isFire;
+        Color color;
+
+        SmokeParticle(double x, double y, boolean isFire) {
+            this.x = x;
+            this.y = y;
+            this.isFire = isFire;
+            this.vx = (Math.random() - 0.5) * 1.8;
+            this.vy = isFire ? (-1.8 - Math.random() * 2.2) : (-1.2 - Math.random() * 1.6);
+            this.size = isFire ? (5 + (float)(Math.random() * 5)) : (7 + (float)(Math.random() * 9));
+            if (isFire) {
+                this.color = Math.random() < 0.5 ? new Color(255, 75, 40) : new Color(255, 185, 30);
+            } else {
+                int shade = 50 + (int)(Math.random() * 60);
+                this.color = new Color(shade, shade, shade);
+            }
+        }
+    }
+
+    // ==========================================
     // === 3. СОСТОЯНИЕ ИГРЫ И ЭКОНОМИКА
     // ==========================================
     private double balance = 1500.0;
@@ -438,6 +523,28 @@ public class WindTycoon extends JFrame {
     // 6. 🏆 Достижения
     private final Set<String> achievements = new HashSet<>();
 
+    // 7. 🗺️ Биомы и локации
+    private Biome currentBiome = Biome.VALLEY;
+    private final Set<String> unlockedBiomes = new HashSet<>();
+
+    // 8. 🍂 Времена года
+    private Season currentSeason = Season.SPRING;
+    private int seasonDayCounter = 0;
+
+    // 9. 👔 Персонал и Специалисты
+    private boolean hiredMeteorologist = false;
+    private boolean hiredBroker = false;
+    private boolean hiredChiefMechanic = false;
+    private String nextWeatherCondition = "Бриз 🍃";
+    private double nextTargetWind = 8.5;
+    private int forecastCountdown = 14;
+
+    // 10. 💤 QoL, Инциденты и Офлайн-прогресс
+    private long lastSaveTime = 0L;
+    private int rareBirdEventTimer = 0;
+    private final List<SnowFlake> snowFlakes = new ArrayList<>();
+    private final List<SmokeParticle> smokeParticles = new ArrayList<>();
+
     // Сетка участков (4x3 = 12 платформ)
     private static final int COLS = 4;
     private static final int ROWS = 3;
@@ -492,15 +599,22 @@ public class WindTycoon extends JFrame {
     private StyledButton buildSolarBtn;
     private StyledButton buildVawtBtn;
     private StyledButton repairBtn;
+    private StyledButton repairAllBtn;
+    private StyledButton extinguishBtn;
     private StyledButton upgradeBtn;
     private StyledButton demolishBtn;
     private StyledButton hireEngineerBtn;
     private StyledButton insuranceToggleBtn;
+    private StyledButton biomeValleyBtn;
+    private StyledButton biomePeaksBtn;
+    private StyledButton biomeOceanBtn;
 
     // Элементы вкладки "Биржа"
     private JLabel batteryStatusLbl;
     private JProgressBar batteryProgressBar;
     private JLabel marketPriceLbl;
+    private JLabel forecastLbl;
+    private JLabel brokerStatusLbl;
     private StyledButton buyBatteryBtn;
     private StyledButton sellBatteryBtn;
 
@@ -512,11 +626,16 @@ public class WindTycoon extends JFrame {
     private StyledButton upgRadarBtn;
     private StyledButton upgDronesUnlockBtn;
     private StyledButton buyDroneBtn;
+    private StyledButton hireMeteorologistBtn;
+    private StyledButton hireBrokerBtn;
+    private StyledButton hireChiefMechanicBtn;
 
     // Элементы вкладки "Престиж & Квесты"
     private JLabel rebirthInfoLbl;
     private StyledButton rebirthBtn;
     private JPanel achievementsPanel;
+    private StyledButton exportSaveBtn;
+    private StyledButton importSaveBtn;
     private StyledButton saveBtn;
     private StyledButton resetBtn;
 
@@ -563,19 +682,23 @@ public class WindTycoon extends JFrame {
 
         for (int i = 0; i < 60; i++) {
             rainDrops.add(new RainDrop(random.nextInt(1280), random.nextInt(800), 12 + random.nextInt(8), 10 + random.nextInt(10)));
+            snowFlakes.add(new SnowFlake(random.nextInt(1280), random.nextInt(800), 1.2 + random.nextDouble() * 2.2, 3 + random.nextInt(4)));
         }
 
         birds.add(new Bird(-50, 80, 2.2));
         birds.add(new Bird(-80, 100, 2.0));
         birds.add(new Bird(-120, 75, 2.3));
 
+        unlockedBiomes.add(Biome.VALLEY.name());
+
         initComponents();
         loadGame();
+        checkOfflineProgress();
         setupTimers();
         MusicPlayer.initAndPlay();
 
         log("🎮 ДОБРО ПОЖАЛОВАТЬ В ОБНОВЛЕННЫЙ WIND TYCOON!");
-        log("✨ Доступны 7 новых систем: Батареи, Биржа, R&D Наука, Дроны, Rebirth, Эко-город и Новые турбины!");
+        log("✨ Включены новые системы: Биомы, Времена года, Пожары, Штаб специалистов и Кросс-сохранения!");
         if (MusicPlayer.findMusicFile() != null) {
             log("🎵 Фоновая музыка обнаружена и воспроизводится!");
         } else {
@@ -808,6 +931,30 @@ public class WindTycoon extends JFrame {
         repDemoGrid.add(demolishBtn);
         p.add(repDemoGrid);
 
+        p.add(Box.createRigidArea(new Dimension(0, 5)));
+
+        // Массовый ремонт и Пожарная безопасность
+        repairAllBtn = new StyledButton("🔧 Починить всё ($0.00)", new Color(39, 174, 96), e -> repairAllTurbines());
+        extinguishBtn = new StyledButton("🧯 Потушить пожары ($250)", new Color(231, 76, 60), e -> extinguishAllFires());
+        extinguishBtn.setVisible(false);
+
+        p.add(repairAllBtn);
+        p.add(Box.createRigidArea(new Dimension(0, 4)));
+        p.add(extinguishBtn);
+        p.add(Box.createRigidArea(new Dimension(0, 6)));
+
+        // Панель выбора биомов
+        JPanel biomeBar = new JPanel(new GridLayout(1, 3, 4, 0));
+        biomeBar.setOpaque(false);
+        biomeBar.setMaximumSize(new Dimension(360, 26));
+        biomeValleyBtn = new StyledButton("🌲 Долина", new Color(46, 204, 113), e -> selectBiome(Biome.VALLEY));
+        biomePeaksBtn = new StyledButton("🏔️ Горы ($15k)", new Color(149, 165, 166), e -> selectBiome(Biome.PEAKS));
+        biomeOceanBtn = new StyledButton("🌊 Шельф ($35k)", new Color(52, 152, 219), e -> selectBiome(Biome.OCEAN));
+        biomeBar.add(biomeValleyBtn);
+        biomeBar.add(biomePeaksBtn);
+        biomeBar.add(biomeOceanBtn);
+        p.add(biomeBar);
+
         p.add(Box.createRigidArea(new Dimension(0, 6)));
 
         // Персонал и Страховка
@@ -910,6 +1057,39 @@ public class WindTycoon extends JFrame {
         sellBatteryBtn = new StyledButton("⚡ Сбросить заряд на биржу ($0.00)", new Color(230, 126, 34), e -> dumpBatteryToMarket());
         p.add(sellBatteryBtn);
 
+        p.add(Box.createRigidArea(new Dimension(0, 6)));
+
+        // Карточка прогноза и ИИ-Брокера
+        JPanel forecastCard = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(24, 32, 48));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
+                g2.setColor(new Color(41, 128, 185));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
+                g2.dispose();
+            }
+        };
+        forecastCard.setLayout(new BoxLayout(forecastCard, BoxLayout.Y_AXIS));
+        forecastCard.setOpaque(false);
+        forecastCard.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+        forecastCard.setMaximumSize(new Dimension(360, 50));
+
+        forecastLbl = new JLabel("🌦️ Прогноз погоды: [Наймите метеоролога]");
+        forecastLbl.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        forecastLbl.setForeground(new Color(130, 200, 255));
+
+        brokerStatusLbl = new JLabel("📈 ИИ-Брокер: Не нанят");
+        brokerStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
+        brokerStatusLbl.setForeground(new Color(175, 190, 210));
+
+        forecastCard.add(forecastLbl);
+        forecastCard.add(Box.createRigidArea(new Dimension(0, 2)));
+        forecastCard.add(brokerStatusLbl);
+        p.add(forecastCard);
+
         return p;
     }
 
@@ -951,6 +1131,23 @@ public class WindTycoon extends JFrame {
         p.add(upgDronesUnlockBtn);
         p.add(Box.createRigidArea(new Dimension(0, 4)));
         p.add(buyDroneBtn);
+        p.add(Box.createRigidArea(new Dimension(0, 6)));
+
+        JLabel staffTitle = new JLabel("👔 ШТАБ СПЕЦИАЛИСТОВ");
+        staffTitle.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        staffTitle.setForeground(new Color(254, 202, 87));
+        p.add(staffTitle);
+        p.add(Box.createRigidArea(new Dimension(0, 3)));
+
+        hireMeteorologistBtn = new StyledButton("🌦️ Метеоролог ($3.5k / 60 SP)", new Color(0, 180, 216), e -> hireSpecialist("METEOROLOGIST"));
+        hireBrokerBtn = new StyledButton("📈 ИИ-Брокер ($7k / 100 SP)", new Color(155, 89, 182), e -> hireSpecialist("BROKER"));
+        hireChiefMechanicBtn = new StyledButton("🛡️ Главный Механик ($5k / 80 SP)", new Color(243, 156, 18), e -> hireSpecialist("MECHANIC"));
+
+        p.add(hireMeteorologistBtn);
+        p.add(Box.createRigidArea(new Dimension(0, 4)));
+        p.add(hireBrokerBtn);
+        p.add(Box.createRigidArea(new Dimension(0, 4)));
+        p.add(hireChiefMechanicBtn);
 
         return p;
     }
@@ -1015,15 +1212,19 @@ public class WindTycoon extends JFrame {
         p.add(Box.createRigidArea(new Dimension(0, 6)));
 
         // Кнопки сохранения и сброса
-        JPanel savePanel = new JPanel(new GridLayout(1, 2, 6, 0));
+        JPanel savePanel = new GridLayout(2, 2, 6, 5) != null ? new JPanel(new GridLayout(2, 2, 6, 5)) : new JPanel();
         savePanel.setOpaque(false);
-        savePanel.setMaximumSize(new Dimension(360, 30));
+        savePanel.setMaximumSize(new Dimension(360, 62));
 
         saveBtn = new StyledButton("💾 Сохранить", new Color(46, 204, 113), e -> saveGame(true));
         resetBtn = new StyledButton("🔄 Сброс", new Color(192, 57, 43), e -> resetGame());
+        exportSaveBtn = new StyledButton("📋 Экспорт (Base64)", new Color(52, 152, 219), e -> exportSaveCode());
+        importSaveBtn = new StyledButton("📥 Импорт (Код)", new Color(155, 89, 182), e -> importSaveCode());
 
         savePanel.add(saveBtn);
         savePanel.add(resetBtn);
+        savePanel.add(exportSaveBtn);
+        savePanel.add(importSaveBtn);
         p.add(savePanel);
 
         return p;
@@ -1182,44 +1383,151 @@ public class WindTycoon extends JFrame {
     // ==========================================
     // === 6. СОХРАНЕНИЕ И ЗАГРУЗКА
     // ==========================================
-    private void saveGame(boolean notifyUser) {
-        try (PrintWriter pw = new PrintWriter(new OutputStreamWriter(new FileOutputStream(SAVE_FILE), StandardCharsets.UTF_8))) {
-            pw.println("balance=" + balance);
-            pw.println("engineers=" + engineersCount);
-            pw.println("isInsured=" + isInsured);
-            pw.println("totalEnergy=" + totalEnergyGenerated);
-            pw.println("gameDays=" + gameDays);
-            pw.println("gameMonths=" + gameMonths);
-            pw.println("cityContractsCompleted=" + cityContractsCompleted);
+    private void writeSaveData(PrintWriter pw) {
+        pw.println("balance=" + balance);
+        pw.println("engineers=" + engineersCount);
+        pw.println("isInsured=" + isInsured);
+        pw.println("totalEnergy=" + totalEnergyGenerated);
+        pw.println("gameDays=" + gameDays);
+        pw.println("gameMonths=" + gameMonths);
+        pw.println("cityContractsCompleted=" + cityContractsCompleted);
 
-            pw.println("batteryCapacity=" + batteryCapacity);
-            pw.println("batteryStored=" + batteryStored);
-            pw.println("sciencePoints=" + sciencePoints);
-            pw.println("techAeroLevel=" + techAeroLevel);
-            pw.println("techCarbonLevel=" + techCarbonLevel);
-            pw.println("techLightningRod=" + techLightningRod);
-            pw.println("techStormRadar=" + techStormRadar);
-            pw.println("techDronesUnlocked=" + techDronesUnlocked);
-            pw.println("rebirthCount=" + rebirthCount);
-            pw.println("greenTokens=" + greenTokens);
-            pw.println("droneCount=" + droneCount);
+        pw.println("batteryCapacity=" + batteryCapacity);
+        pw.println("batteryStored=" + batteryStored);
+        pw.println("sciencePoints=" + sciencePoints);
+        pw.println("techAeroLevel=" + techAeroLevel);
+        pw.println("techCarbonLevel=" + techCarbonLevel);
+        pw.println("techLightningRod=" + techLightningRod);
+        pw.println("techStormRadar=" + techStormRadar);
+        pw.println("techDronesUnlocked=" + techDronesUnlocked);
+        pw.println("rebirthCount=" + rebirthCount);
+        pw.println("greenTokens=" + greenTokens);
+        pw.println("droneCount=" + droneCount);
 
-            StringBuilder sbAch = new StringBuilder();
-            for (String ach : achievements) {
-                if (sbAch.length() > 0) sbAch.append(";");
-                sbAch.append(ach);
+        pw.println("currentBiome=" + currentBiome.name());
+        StringBuilder sbBiomes = new StringBuilder();
+        for (String b : unlockedBiomes) {
+            if (sbBiomes.length() > 0) sbBiomes.append(";");
+            sbBiomes.append(b);
+        }
+        pw.println("unlockedBiomes=" + sbBiomes.toString());
+
+        pw.println("currentSeason=" + currentSeason.name());
+        pw.println("seasonDayCounter=" + seasonDayCounter);
+
+        pw.println("hiredMeteorologist=" + hiredMeteorologist);
+        pw.println("hiredBroker=" + hiredBroker);
+        pw.println("hiredChiefMechanic=" + hiredChiefMechanic);
+
+        pw.println("lastSaveTime=" + System.currentTimeMillis());
+
+        StringBuilder sbAch = new StringBuilder();
+        for (String ach : achievements) {
+            if (sbAch.length() > 0) sbAch.append(";");
+            sbAch.append(ach);
+        }
+        pw.println("achievements=" + sbAch.toString());
+
+        for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < ROWS; r++) {
+                Plot p = plots[c][r];
+                if (p.hasTurbine()) {
+                    pw.println("plot=" + c + "," + r + "," + p.turbine.name() + "," + p.level + "," + p.durability + "," + p.isBurning);
+                }
             }
-            pw.println("achievements=" + sbAch.toString());
+        }
+    }
 
-            for (int c = 0; c < COLS; c++) {
-                for (int r = 0; r < ROWS; r++) {
-                    Plot p = plots[c][r];
-                    if (p.hasTurbine()) {
-                        pw.println("plot=" + c + "," + r + "," + p.turbine.name() + "," + p.level + "," + p.durability);
+    private void readSaveData(BufferedReader br) throws IOException {
+        String line;
+        while ((line = br.readLine()) != null) {
+            line = line.trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
+
+            if (line.startsWith("balance=")) {
+                balance = Double.parseDouble(line.substring(8));
+            } else if (line.startsWith("engineers=")) {
+                engineersCount = Integer.parseInt(line.substring(10));
+            } else if (line.startsWith("isInsured=")) {
+                isInsured = Boolean.parseBoolean(line.substring(10));
+            } else if (line.startsWith("totalEnergy=")) {
+                totalEnergyGenerated = Double.parseDouble(line.substring(12));
+            } else if (line.startsWith("gameDays=")) {
+                gameDays = Integer.parseInt(line.substring(9));
+            } else if (line.startsWith("gameMonths=")) {
+                gameMonths = Integer.parseInt(line.substring(11));
+            } else if (line.startsWith("cityContractsCompleted=")) {
+                cityContractsCompleted = Integer.parseInt(line.substring(23));
+            } else if (line.startsWith("batteryCapacity=")) {
+                batteryCapacity = Double.parseDouble(line.substring(16));
+            } else if (line.startsWith("batteryStored=")) {
+                batteryStored = Double.parseDouble(line.substring(14));
+            } else if (line.startsWith("sciencePoints=")) {
+                sciencePoints = Double.parseDouble(line.substring(14));
+            } else if (line.startsWith("techAeroLevel=")) {
+                techAeroLevel = Integer.parseInt(line.substring(14));
+            } else if (line.startsWith("techCarbonLevel=")) {
+                techCarbonLevel = Integer.parseInt(line.substring(16));
+            } else if (line.startsWith("techLightningRod=")) {
+                techLightningRod = Boolean.parseBoolean(line.substring(17));
+            } else if (line.startsWith("techStormRadar=")) {
+                techStormRadar = Boolean.parseBoolean(line.substring(15));
+            } else if (line.startsWith("techDronesUnlocked=")) {
+                techDronesUnlocked = Boolean.parseBoolean(line.substring(19));
+            } else if (line.startsWith("rebirthCount=")) {
+                rebirthCount = Integer.parseInt(line.substring(13));
+            } else if (line.startsWith("greenTokens=")) {
+                greenTokens = Integer.parseInt(line.substring(12));
+            } else if (line.startsWith("droneCount=")) {
+                droneCount = Integer.parseInt(line.substring(11));
+                syncDronesList();
+            } else if (line.startsWith("currentBiome=")) {
+                try { currentBiome = Biome.valueOf(line.substring(13)); } catch (Exception ignored) {}
+            } else if (line.startsWith("unlockedBiomes=")) {
+                String[] ub = line.substring(15).split(";");
+                for (String b : ub) { if (!b.isEmpty()) unlockedBiomes.add(b); }
+            } else if (line.startsWith("currentSeason=")) {
+                try { currentSeason = Season.valueOf(line.substring(14)); } catch (Exception ignored) {}
+            } else if (line.startsWith("seasonDayCounter=")) {
+                seasonDayCounter = Integer.parseInt(line.substring(17));
+            } else if (line.startsWith("hiredMeteorologist=")) {
+                hiredMeteorologist = Boolean.parseBoolean(line.substring(19));
+            } else if (line.startsWith("hiredBroker=")) {
+                hiredBroker = Boolean.parseBoolean(line.substring(12));
+            } else if (line.startsWith("hiredChiefMechanic=")) {
+                hiredChiefMechanic = Boolean.parseBoolean(line.substring(19));
+            } else if (line.startsWith("lastSaveTime=")) {
+                lastSaveTime = Long.parseLong(line.substring(13));
+            } else if (line.startsWith("achievements=")) {
+                String[] achs = line.substring(13).split(";");
+                for (String a : achs) {
+                    if (!a.isEmpty()) achievements.add(a);
+                }
+            } else if (line.startsWith("plot=")) {
+                String[] parts = line.substring(5).split(",");
+                if (parts.length >= 5) {
+                    int c = Integer.parseInt(parts[0]);
+                    int r = Integer.parseInt(parts[1]);
+                    TurbineType t = TurbineType.valueOf(parts[2]);
+                    int lvl = Integer.parseInt(parts[3]);
+                    double dur = Double.parseDouble(parts[4]);
+
+                    if (c >= 0 && c < COLS && r >= 0 && r < ROWS) {
+                        plots[c][r].turbine = t;
+                        plots[c][r].level = lvl;
+                        plots[c][r].durability = dur;
+                        if (parts.length >= 6) {
+                            plots[c][r].isBurning = Boolean.parseBoolean(parts[5]);
+                        }
                     }
                 }
             }
+        }
+    }
 
+    private void saveGame(boolean notifyUser) {
+        try (PrintWriter pw = new PrintWriter(new OutputStreamWriter(new FileOutputStream(SAVE_FILE), StandardCharsets.UTF_8))) {
+            writeSaveData(pw);
             if (notifyUser) {
                 SoundSystem.play("coin");
                 log("💾 Игра успешно сохранена в " + SAVE_FILE + "!");
@@ -1235,70 +1543,7 @@ public class WindTycoon extends JFrame {
         if (!f.exists()) return;
 
         try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty() || line.startsWith("#")) continue;
-
-                if (line.startsWith("balance=")) {
-                    balance = Double.parseDouble(line.substring(8));
-                } else if (line.startsWith("engineers=")) {
-                    engineersCount = Integer.parseInt(line.substring(10));
-                } else if (line.startsWith("isInsured=")) {
-                    isInsured = Boolean.parseBoolean(line.substring(10));
-                } else if (line.startsWith("totalEnergy=")) {
-                    totalEnergyGenerated = Double.parseDouble(line.substring(12));
-                } else if (line.startsWith("gameDays=")) {
-                    gameDays = Integer.parseInt(line.substring(9));
-                } else if (line.startsWith("gameMonths=")) {
-                    gameMonths = Integer.parseInt(line.substring(11));
-                } else if (line.startsWith("cityContractsCompleted=")) {
-                    cityContractsCompleted = Integer.parseInt(line.substring(23));
-                } else if (line.startsWith("batteryCapacity=")) {
-                    batteryCapacity = Double.parseDouble(line.substring(16));
-                } else if (line.startsWith("batteryStored=")) {
-                    batteryStored = Double.parseDouble(line.substring(14));
-                } else if (line.startsWith("sciencePoints=")) {
-                    sciencePoints = Double.parseDouble(line.substring(14));
-                } else if (line.startsWith("techAeroLevel=")) {
-                    techAeroLevel = Integer.parseInt(line.substring(14));
-                } else if (line.startsWith("techCarbonLevel=")) {
-                    techCarbonLevel = Integer.parseInt(line.substring(16));
-                } else if (line.startsWith("techLightningRod=")) {
-                    techLightningRod = Boolean.parseBoolean(line.substring(17));
-                } else if (line.startsWith("techStormRadar=")) {
-                    techStormRadar = Boolean.parseBoolean(line.substring(15));
-                } else if (line.startsWith("techDronesUnlocked=")) {
-                    techDronesUnlocked = Boolean.parseBoolean(line.substring(19));
-                } else if (line.startsWith("rebirthCount=")) {
-                    rebirthCount = Integer.parseInt(line.substring(13));
-                } else if (line.startsWith("greenTokens=")) {
-                    greenTokens = Integer.parseInt(line.substring(12));
-                } else if (line.startsWith("droneCount=")) {
-                    droneCount = Integer.parseInt(line.substring(11));
-                    syncDronesList();
-                } else if (line.startsWith("achievements=")) {
-                    String[] achs = line.substring(13).split(";");
-                    for (String a : achs) {
-                        if (!a.isEmpty()) achievements.add(a);
-                    }
-                } else if (line.startsWith("plot=")) {
-                    String[] parts = line.substring(5).split(",");
-                    if (parts.length >= 5) {
-                        int c = Integer.parseInt(parts[0]);
-                        int r = Integer.parseInt(parts[1]);
-                        TurbineType t = TurbineType.valueOf(parts[2]);
-                        int lvl = Integer.parseInt(parts[3]);
-                        double dur = Double.parseDouble(parts[4]);
-
-                        if (c >= 0 && c < COLS && r >= 0 && r < ROWS) {
-                            plots[c][r].turbine = t;
-                            plots[c][r].level = lvl;
-                            plots[c][r].durability = dur;
-                        }
-                    }
-                }
-            }
+            readSaveData(br);
             log("💾 Сохранение успешно загружено! Баланс: $" + dfMoney.format(balance));
             updateControlButtons();
             updateAchievementsView();
@@ -1306,6 +1551,256 @@ public class WindTycoon extends JFrame {
         } catch (Exception ex) {
             log("⚠️ Ошибка при чтении сохранения: " + ex.getMessage());
         }
+    }
+
+    private void checkOfflineProgress() {
+        if (lastSaveTime <= 0) return;
+        long elapsedSec = (System.currentTimeMillis() - lastSaveTime) / 1000;
+        if (elapsedSec < 15) return;
+        long cappedSec = Math.min(elapsedSec, 8 * 3600); // capped at 8 hours
+
+        double baseIncome = 0.0;
+        double basePower = 0.0;
+        for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < ROWS; r++) {
+                Plot p = plots[c][r];
+                if (p.hasTurbine() && p.durability > 10.0 && !p.isBurning) {
+                    baseIncome += p.turbine.baseIncomePerSec * p.level;
+                    basePower += p.turbine.maxPowerKw * p.level;
+                }
+            }
+        }
+        if (baseIncome <= 0) return;
+
+        double rebirthMult = 1.0 + (rebirthCount * 0.5);
+        double offlineEarnings = baseIncome * 0.45 * cappedSec * rebirthMult;
+        double offlineEnergy = (basePower * 0.45 * cappedSec) / 3600.0;
+
+        balance += offlineEarnings;
+        totalEnergyGenerated += offlineEnergy;
+
+        long hours = elapsedSec / 3600;
+        long mins = (elapsedSec % 3600) / 60;
+        String timeStr = (hours > 0 ? hours + " ч " : "") + mins + " мин";
+
+        SwingUtilities.invokeLater(() -> {
+            JOptionPane.showMessageDialog(this,
+                    "<html><body style='width: 320px; font-family: sans-serif; background-color: #1a2230; color: #ffffff; padding: 10px;'>" +
+                    "<h2 style='color: #00d2d3; margin-top:0;'>👋 С возвращением!</h2>" +
+                    "<p>Пока вас не было (<b>" + timeStr + "</b>), ваш ветропарк продолжал вырабатывать чистую энергию!</p>" +
+                    "<hr style='border: 1px solid #2e3d52;'>" +
+                    "<p>⚡ Выработано: <b style='color: #00e5ff;'>" + dfShort.format(offlineEnergy) + " кВт⋅ч</b></p>" +
+                    "<p>💰 Получено чистой прибыли: <b style='color: #2ecc71;'>+$" + dfMoney.format(offlineEarnings) + "</b></p>" +
+                    "</body></html>",
+                    "⚡ Wind Tycoon: Офлайн-прибыль",
+                    JOptionPane.INFORMATION_MESSAGE);
+        });
+        log("👋 ОФЛАЙН-ПРОГРЕСС: За время отсутствия (" + timeStr + ") начислено +$" + dfMoney.format(offlineEarnings) + "!");
+    }
+
+    private void exportSaveCode() {
+        try {
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            writeSaveData(pw);
+            pw.flush();
+            String plain = sw.toString();
+            String b64 = Base64.getEncoder().encodeToString(plain.getBytes(StandardCharsets.UTF_8));
+
+            StringSelection sel = new StringSelection(b64);
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(sel, sel);
+
+            JTextArea ta = new JTextArea(b64);
+            ta.setLineWrap(true);
+            ta.setWrapStyleWord(true);
+            ta.setEditable(false);
+            ta.setRows(6);
+            ta.setColumns(35);
+            JScrollPane sp = new JScrollPane(ta);
+
+            JOptionPane.showMessageDialog(this, sp,
+                    "📋 Код сохранения скопирован в буфер обмена!\nВы можете использовать его на Android или другом ПК:",
+                    JOptionPane.INFORMATION_MESSAGE);
+            log("📋 Экспорт сохранения завершен! Код скопирован в буфер обмена.");
+        } catch (Exception ex) {
+            log("⚠️ Ошибка экспорта сохранения: " + ex.getMessage());
+        }
+    }
+
+    private void importSaveCode() {
+        String input = JOptionPane.showInputDialog(this,
+                "Вставьте код сохранения (Base64) для импорта:",
+                "📥 Импорт сохранения", JOptionPane.QUESTION_MESSAGE);
+        if (input == null || input.trim().isEmpty()) return;
+
+        try {
+            byte[] bytes = Base64.getDecoder().decode(input.trim());
+            String decoded = new String(bytes, StandardCharsets.UTF_8);
+            BufferedReader br = new BufferedReader(new StringReader(decoded));
+            readSaveData(br);
+            log("✅ Сохранение успешно импортировано! Приятной игры!");
+            floatingTexts.add(new FloatingText(canvas.getWidth() / 2, canvas.getHeight() / 2, "✅ СЕЙВ ИМПОРТИРОВАН!", new Color(46, 204, 113)));
+            SoundSystem.play("quest");
+            updateControlButtons();
+            updateAchievementsView();
+            updateUI();
+            canvas.repaint();
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this,
+                    "Не удалось прочитать код сохранения! Убедитесь, что скопировали его полностью.",
+                    "Ошибка импорта", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void selectBiome(Biome b) {
+        if (currentBiome == b) return;
+        if (!unlockedBiomes.contains(b.name())) {
+            if (balance < b.unlockCost) {
+                JOptionPane.showMessageDialog(this,
+                        "Для открытия биома '" + b.title + "' требуется $" + dfMoney.format(b.unlockCost) + "!\n" + b.desc,
+                        "Открытие биома", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            balance -= b.unlockCost;
+            unlockedBiomes.add(b.name());
+            SoundSystem.play("quest");
+            log("🗺️ ОТКРЫТ НОВЫЙ БИОМ: " + b.title + "! " + b.desc);
+            floatingTexts.add(new FloatingText(canvas.getWidth() / 2, canvas.getHeight() / 3, "🗺️ " + b.title + "!", new Color(46, 204, 113)));
+        }
+
+        currentBiome = b;
+        SoundSystem.play("click");
+        log("🗺️ Вы переместились на локацию: " + b.title + " (" + b.desc + ")");
+        updateControlButtons();
+        updateUI();
+        canvas.repaint();
+    }
+
+    private void repairAllTurbines() {
+        double totalCost = 0.0;
+        int count = 0;
+        for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < ROWS; r++) {
+                Plot p = plots[c][r];
+                if (p.hasTurbine() && (p.durability < 99.5 || p.isBurning)) {
+                    count++;
+                    double need = (100.0 - p.durability) / 100.0;
+                    totalCost += p.turbine.cost * 0.15 * need;
+                }
+            }
+        }
+        totalCost *= 0.85; // 15% оптовая скидка
+        if (count == 0) return;
+        if (balance < totalCost) {
+            JOptionPane.showMessageDialog(this, "Нужно $" + dfMoney.format(totalCost) + " для массового ремонта всех турбин!", "Ремонт", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        balance -= totalCost;
+        int cellW = canvas.getWidth() / COLS;
+        int cellH = (int)(canvas.getHeight() * 0.72) / ROWS;
+        int groundY = (int)(canvas.getHeight() * 0.12);
+
+        for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < ROWS; r++) {
+                Plot p = plots[c][r];
+                if (p.hasTurbine() && (p.durability < 100.0 || p.isBurning)) {
+                    p.durability = 100.0;
+                    p.isBurning = false;
+                    spawnSparkles(c * cellW + cellW / 2, groundY + r * cellH + 30, new Color(46, 204, 113));
+                }
+            }
+        }
+
+        SoundSystem.play("build");
+        log("🔧 МАССОВЫЙ РЕМОНТ: Отремонтировано " + count + " турбин со скидкой 15% за $" + dfMoney.format(totalCost) + "!");
+        floatingTexts.add(new FloatingText(canvas.getWidth() / 2, canvas.getHeight() / 3, "🔧 ВСЕ ВЕТРЯКИ ПОЧИНЕНЫ!", new Color(46, 204, 113)));
+        updateControlButtons();
+        updateUI();
+        canvas.repaint();
+    }
+
+    private void extinguishAllFires() {
+        int burningCount = 0;
+        for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < ROWS; r++) {
+                if (plots[c][r].isBurning) burningCount++;
+            }
+        }
+        if (burningCount == 0) return;
+        double cost = 250.0;
+        if (balance < cost) {
+            JOptionPane.showMessageDialog(this, "Нужно $250 для вызова пожарного расчета!", "Пожар", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        balance -= cost;
+        int cellW = canvas.getWidth() / COLS;
+        int cellH = (int)(canvas.getHeight() * 0.72) / ROWS;
+        int groundY = (int)(canvas.getHeight() * 0.12);
+
+        for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < ROWS; r++) {
+                Plot p = plots[c][r];
+                if (p.isBurning) {
+                    p.isBurning = false;
+                    p.durability = Math.max(25.0, p.durability);
+                    spawnSparkles(c * cellW + cellW / 2, groundY + r * cellH + 25, new Color(100, 200, 255));
+                }
+            }
+        }
+
+        SoundSystem.play("build");
+        log("🧯 Пожарная служба ликвидировала возгорания на всех турбинах!");
+        floatingTexts.add(new FloatingText(canvas.getWidth() / 2, canvas.getHeight() / 3, "🧯 ПОЖАР ЛИКВИДИРОВАН!", new Color(52, 152, 219)));
+        updateControlButtons();
+        updateUI();
+        canvas.repaint();
+    }
+
+    private void hireSpecialist(String type) {
+        if ("METEOROLOGIST".equals(type)) {
+            if (hiredMeteorologist) return;
+            double money = 3500.0;
+            double sp = 60.0;
+            if (balance < money || sciencePoints < sp) {
+                JOptionPane.showMessageDialog(this, "Нужно $3,500 и 60 SP для найма Метеоролога!", "Штаб", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            balance -= money;
+            sciencePoints -= sp;
+            hiredMeteorologist = true;
+            SoundSystem.play("research");
+            log("🌦️ Нанят Метеоролог (Dr. Ветров)! Теперь доступен точный прогноз погоды и предупреждение о бурях.");
+        } else if ("BROKER".equals(type)) {
+            if (hiredBroker) return;
+            double money = 7000.0;
+            double sp = 100.0;
+            if (balance < money || sciencePoints < sp) {
+                JOptionPane.showMessageDialog(this, "Нужно $7,000 и 100 SP для найма ИИ-Брокера!", "Штаб", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            balance -= money;
+            sciencePoints -= sp;
+            hiredBroker = true;
+            SoundSystem.play("market");
+            log("📈 Нанят ИИ-Брокер (Quantum Trader)! Батареи автоматически сбрасываются при пиковых тарифах.");
+        } else if ("MECHANIC".equals(type)) {
+            if (hiredChiefMechanic) return;
+            double money = 5000.0;
+            double sp = 80.0;
+            if (balance < money || sciencePoints < sp) {
+                JOptionPane.showMessageDialog(this, "Нужно $5,000 и 80 SP для найма Главного Механика!", "Штаб", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            balance -= money;
+            sciencePoints -= sp;
+            hiredChiefMechanic = true;
+            SoundSystem.play("build");
+            log("🛡️ Нанят Главный Механик (Мастер Петро)! Износ турбин снижен на 30%, шанс 35% спасения от аварии.");
+        }
+        updateControlButtons();
+        updateUI();
     }
 
     private void syncDronesList() {
@@ -1448,6 +1943,44 @@ public class WindTycoon extends JFrame {
                     b.y = 50 + random.nextInt(160);
                 }
             }
+
+            if (currentSeason == Season.WINTER) {
+                for (SnowFlake sf : snowFlakes) {
+                    sf.y += sf.speed;
+                    sf.sway += sf.swaySpeed;
+                    sf.x += Math.sin(sf.sway) * 1.2 + (windSpeed * 0.15);
+                    if (sf.y > h) {
+                        sf.y = -10;
+                        sf.x = random.nextInt(w);
+                    }
+                }
+            }
+
+            int cellW_vis = w / COLS;
+            int cellH_vis = (int)(h * 0.72) / ROWS;
+            int groundY_vis = (int)(h * 0.12);
+            for (int c = 0; c < COLS; c++) {
+                for (int r = 0; r < ROWS; r++) {
+                    Plot p = plots[c][r];
+                    if (p.hasTurbine() && p.isBurning && cellW_vis > 0) {
+                        double px = c * cellW_vis + cellW_vis / 2.0;
+                        double py = groundY_vis + r * cellH_vis + (cellH_vis * 0.15);
+                        smokeParticles.add(new SmokeParticle(px, py, true));
+                        if (Math.random() < 0.6) {
+                            smokeParticles.add(new SmokeParticle(px, py, false));
+                        }
+                    }
+                }
+            }
+
+            Iterator<SmokeParticle> itSm = smokeParticles.iterator();
+            while (itSm.hasNext()) {
+                SmokeParticle sm = itSm.next();
+                sm.x += sm.vx + (windSpeed * 0.05);
+                sm.y += sm.vy;
+                sm.alpha -= 0.03f;
+                if (sm.alpha <= 0.0f) itSm.remove();
+            }
         }
 
         updateDronesPhysics();
@@ -1486,16 +2019,32 @@ public class WindTycoon extends JFrame {
         for (RepairDrone drone : drones) {
             drone.rotorAngle = (drone.rotorAngle + 35.0) % 360.0;
 
-            if (drone.targetPlot == null || drone.targetPlot.durability >= 99.5 || !drone.targetPlot.hasTurbine()) {
+            if (drone.targetPlot == null || (drone.targetPlot.durability >= 99.5 && !drone.targetPlot.isBurning) || !drone.targetPlot.hasTurbine()) {
                 drone.targetPlot = null;
                 drone.isWelding = false;
-                double minDur = 99.5;
+
+                // Приоритет 1: горящие турбины
                 for (int c = 0; c < COLS; c++) {
                     for (int r = 0; r < ROWS; r++) {
                         Plot p = plots[c][r];
-                        if (p.hasTurbine() && p.durability < minDur) {
-                            minDur = p.durability;
+                        if (p.hasTurbine() && p.isBurning) {
                             drone.targetPlot = p;
+                            break;
+                        }
+                    }
+                    if (drone.targetPlot != null) break;
+                }
+
+                // Приоритет 2: изношенные турбины
+                if (drone.targetPlot == null) {
+                    double minDur = 99.5;
+                    for (int c = 0; c < COLS; c++) {
+                        for (int r = 0; r < ROWS; r++) {
+                            Plot p = plots[c][r];
+                            if (p.hasTurbine() && p.durability < minDur) {
+                                minDur = p.durability;
+                                drone.targetPlot = p;
+                            }
                         }
                     }
                 }
@@ -1514,10 +2063,17 @@ public class WindTycoon extends JFrame {
                     drone.y += (dy / dist) * 4.5;
                     drone.isWelding = false;
                 } else {
-                    drone.isWelding = true;
-                    drone.targetPlot.durability = Math.min(100.0, drone.targetPlot.durability + 0.35);
-                    if (Math.random() < 0.4) {
-                        sparkles.add(new Sparkle(drone.x, drone.y + 6, new Color(0, 220, 255)));
+                    if (drone.targetPlot.isBurning) {
+                        drone.targetPlot.isBurning = false;
+                        sparkles.add(new Sparkle(drone.x, drone.y + 6, new Color(100, 200, 255)));
+                        log("🤖 Ремонтный дрон ликвидировал возгорание на слоте [" + (drone.targetPlot.col + 1) + "," + (drone.targetPlot.row + 1) + "]!");
+                        SoundSystem.play("build");
+                    } else {
+                        drone.isWelding = true;
+                        drone.targetPlot.durability = Math.min(100.0, drone.targetPlot.durability + 0.35);
+                        if (Math.random() < 0.4) {
+                            sparkles.add(new Sparkle(drone.x, drone.y + 6, new Color(0, 220, 255)));
+                        }
                     }
                 }
             } else {
@@ -1542,6 +2098,32 @@ public class WindTycoon extends JFrame {
             processMonthlyInsurance();
         }
 
+        // Смена сезонов каждые 7 дней
+        seasonDayCounter++;
+        if (seasonDayCounter >= 7) {
+            seasonDayCounter = 0;
+            currentSeason = Season.values()[(currentSeason.ordinal() + 1) % Season.values().length];
+            log("🍂 СМЕНА СЕЗОНА: Наступила " + currentSeason.title + "! " + currentSeason.desc);
+            floatingTexts.add(new FloatingText(canvas.getWidth() / 2, 70, currentSeason.title + "!", new Color(254, 202, 87)));
+        }
+
+        // Прогноз погоды
+        if (hiredMeteorologist && forecastCountdown > 0) {
+            forecastCountdown--;
+            if (forecastCountdown <= 0) forecastCountdown = 14;
+        }
+
+        // Эко-патруль (краснокнижные птицы)
+        rareBirdEventTimer++;
+        if (rareBirdEventTimer >= 80) {
+            rareBirdEventTimer = 0;
+            balance += 1500.0;
+            SoundSystem.play("quest");
+            log("🦅 ЭКО-ПАТРУЛЬ: Стая краснокнижных орлов безопасно пролетела над парком! Грант: +$1,500!");
+            floatingTexts.add(new FloatingText(canvas.getWidth() / 2, 90, "🦅 ЭКО-ГРАНТ +$1,500!", new Color(254, 202, 87)));
+            spawnSparkles(canvas.getWidth() / 2, 100, new Color(254, 202, 87));
+        }
+
         if (climateSummitTimer > 0) climateSummitTimer--;
         if (marketPeakTimer > 0) marketPeakTimer--;
 
@@ -1559,8 +2141,16 @@ public class WindTycoon extends JFrame {
 
         double rebirthMultiplier = 1.0 + (rebirthCount * 0.5);
         double aeroMultiplier = 1.0 + (techAeroLevel * 0.15);
-        double wearMultiplier = Math.max(0.15, 1.0 - (techCarbonLevel * 0.25));
+        double wearMultiplier = Math.max(0.12, 1.0 - (techCarbonLevel * 0.25));
+
+        // Эффекты специалистов и сезонов на износ
+        if (hiredChiefMechanic) wearMultiplier *= 0.70;
+        if (currentSeason == Season.SPRING) wearMultiplier *= 0.80;
+
         double summitMultiplier = (climateSummitTimer > 0) ? 2.0 : 1.0;
+        double winterTariff = (currentSeason == Season.WINTER) ? 1.35 : 1.0;
+        double summerSolar = (currentSeason == Season.SUMMER) ? 1.50 : 1.0;
+        double biomeIncomeMult = currentBiome.incomeModifier;
 
         int cellW = canvas.getWidth() / COLS;
         int cellH = (int)(canvas.getHeight() * 0.72) / ROWS;
@@ -1583,11 +2173,16 @@ public class WindTycoon extends JFrame {
                     double levelBonus = 1.0 + (p.level - 1) * 0.35;
 
                     double kw = p.turbine.maxPowerKw * localWindEff * healthFactor * levelBonus * comboMultiplier * aeroMultiplier;
-                    double turbineIncome = p.turbine.baseIncomePerSec * localWindEff * healthFactor * levelBonus * comboMultiplier * rebirthMultiplier * summitMultiplier;
+                    double turbineIncome = p.turbine.baseIncomePerSec * localWindEff * healthFactor * levelBonus * comboMultiplier * rebirthMultiplier * summitMultiplier * winterTariff * biomeIncomeMult;
 
                     if (p.turbine == TurbineType.SOLAR_HYBRID && isDaytime) {
-                        turbineIncome += 140.0 * levelBonus * rebirthMultiplier;
-                        kw += 800.0 * levelBonus;
+                        turbineIncome += (140.0 * levelBonus * rebirthMultiplier * summerSolar);
+                        kw += (800.0 * levelBonus * summerSolar);
+                    }
+
+                    if (p.turbine == TurbineType.OFFSHORE && currentBiome == Biome.OCEAN) {
+                        kw *= 1.50;
+                        turbineIncome *= 1.50;
                     }
 
                     if (turbineIncome < 1.0) turbineIncome = 1.0;
@@ -1597,9 +2192,38 @@ public class WindTycoon extends JFrame {
 
                     double stormWear = (windSpeed > 15.0) ? 1.8 : 1.0;
                     p.durability -= (p.turbine.wearRate / p.level) * stormWear * wearMultiplier;
+
+                    // Логика горения
+                    if (p.isBurning) {
+                        p.durability = Math.max(0.0, p.durability - 2.5);
+                        if (p.durability <= 0.0) {
+                            p.isBurning = false;
+                        }
+                    } else if (!tornadoActive && p.hasTurbine() && p.durability > 15.0) {
+                        boolean highStress = (windSpeed > 17.0 && p.durability < 65.0);
+                        double fireChance = highStress ? 0.025 : 0.0007;
+                        if (random.nextDouble() < fireChance) {
+                            p.isBurning = true;
+                            SoundSystem.play("siren");
+                            log("🔥 АВАРИЯ! Перегрев и возгорание на слоте [" + (c + 1) + "," + (r + 1) + "]! Потушите кликом!");
+                            floatingTexts.add(new FloatingText(canvas.getWidth() / 2, 70, "🔥 ПОЖАР НА ТУРБИНЕ!", new Color(231, 76, 60)));
+                        }
+                    }
+
                     if (p.durability <= 0.0) {
-                        p.durability = 0.0;
-                        log("⚠️ Внимание! Турбина на [" + (c + 1) + "," + (r + 1) + "] сломалась!");
+                        if (hiredChiefMechanic && random.nextDouble() < 0.35) {
+                            p.durability = 45.0;
+                            p.isBurning = false;
+                            log("🛡️ Главный механик спас турбину [" + (c + 1) + "," + (r + 1) + "] от аварии и восстановил 45% прочности!");
+                            SoundSystem.play("build");
+                            if (cellW > 0 && cellH > 0) {
+                                spawnSparkles(c * cellW + cellW / 2, (int)(canvas.getHeight() * 0.12) + r * cellH + 30, new Color(243, 156, 18));
+                            }
+                        } else {
+                            p.durability = 0.0;
+                            p.isBurning = false;
+                            log("⚠️ Внимание! Турбина на [" + (c + 1) + "," + (r + 1) + "] сломалась!");
+                        }
                     }
 
                     if (cellW > 0 && Math.random() < 0.45) {
@@ -1616,7 +2240,7 @@ public class WindTycoon extends JFrame {
             for (int c = 0; c < COLS; c++) {
                 for (int r = 0; r < ROWS; r++) {
                     Plot p = plots[c][r];
-                    if (p.hasTurbine() && p.durability < 98.0 && pool > 0) {
+                    if (p.hasTurbine() && p.durability < 98.0 && !p.isBurning && pool > 0) {
                         double need = 100.0 - p.durability;
                         double fix = Math.min(need, pool);
                         p.durability += fix;
@@ -1638,6 +2262,14 @@ public class WindTycoon extends JFrame {
             double discharge = Math.min(needed, batteryStored);
             batteryStored -= discharge;
             currentTotalKw += discharge;
+        }
+
+        // Авто-сброс ИИ-брокера
+        if (hiredBroker && batteryStored >= 200.0) {
+            double effPrice = marketPricePerKwh * marketMultiplier * winterTariff;
+            if (marketPeakTimer > 0 || effPrice >= 0.30) {
+                dumpBatteryToMarket();
+            }
         }
 
         double spGained = (0.3 + (totalTurbineLevels * 0.15)) * rebirthMultiplier;
@@ -1733,24 +2365,56 @@ public class WindTycoon extends JFrame {
     }
 
     private void updateWeatherEvent() {
-        int ev = random.nextInt(100);
-        if (ev < 15) {
+        if (hiredMeteorologist && nextWeatherCondition != null) {
+            weatherCondition = nextWeatherCondition;
+            targetWindSpeed = nextTargetWind;
+        } else {
+            determineNextWeather();
+            weatherCondition = nextWeatherCondition;
+            targetWindSpeed = nextTargetWind;
+        }
+
+        if (weatherCondition.contains("ТОРНАДО")) {
             spawnTornadoEvent();
-        } else if (ev < 30) {
+        } else if (weatherCondition.contains("Гроза")) {
             spawnLightningStormEvent();
-        } else if (ev < 45) {
+        } else if (weatherCondition.contains("Саммит")) {
             spawnClimateSummitEvent();
-        } else if (ev < 65) {
-            targetWindSpeed = 13.5 + random.nextDouble() * 4.0;
-            weatherCondition = "Сильный ветер 💨";
+        } else if (weatherCondition.contains("Сильный ветер")) {
             log("💨 Сильный ветер! Высокий КПД ветропарка.");
-        } else if (ev < 80) {
-            targetWindSpeed = 3.0 + random.nextDouble() * 2.0;
-            weatherCondition = "Штиль ☁️";
+        } else if (weatherCondition.contains("Штиль")) {
             log("☁️ Наступил штиль, выработка снижена.");
         } else {
-            targetWindSpeed = 8.0 + random.nextDouble() * 4.0;
-            weatherCondition = "Бриз 🍃";
+            log("🍃 Погода: " + weatherCondition);
+        }
+
+        determineNextWeather();
+        forecastCountdown = 14;
+    }
+
+    private void determineNextWeather() {
+        int ev = random.nextInt(100);
+        double biomeMult = currentBiome.windModifier;
+        double seasonMult = currentSeason.windFactor;
+
+        if (ev < 15) {
+            nextWeatherCondition = "ТОРНАДО 🌪️";
+            nextTargetWind = 24.0 * biomeMult;
+        } else if (ev < 30) {
+            nextWeatherCondition = "Гроза ⚡";
+            nextTargetWind = (18.0 + random.nextDouble() * 5.0) * biomeMult;
+        } else if (ev < 45) {
+            nextWeatherCondition = "Саммит ООН 🌍";
+            nextTargetWind = (10.0 + random.nextDouble() * 4.0) * biomeMult * seasonMult;
+        } else if (ev < 65) {
+            nextWeatherCondition = "Сильный ветер 💨";
+            nextTargetWind = (13.5 + random.nextDouble() * 4.0) * biomeMult * seasonMult;
+        } else if (ev < 80) {
+            nextWeatherCondition = "Штиль ☁️";
+            nextTargetWind = (3.0 + random.nextDouble() * 2.0) * biomeMult;
+        } else {
+            nextWeatherCondition = "Бриз 🍃";
+            nextTargetWind = (8.0 + random.nextDouble() * 4.0) * biomeMult * seasonMult;
         }
     }
 
@@ -1790,7 +2454,12 @@ public class WindTycoon extends JFrame {
             if (!built.isEmpty()) {
                 Plot hit = built.get(random.nextInt(built.size()));
                 hit.durability = Math.max(0.0, hit.durability - 50.0);
-                log("⚡ МОЛНИЯ УДАРИЛА по ветряку [" + (hit.col + 1) + "," + (hit.row + 1) + "]! Изучите громоотвод в лаборатории!");
+                if (Math.random() < 0.40) {
+                    hit.isBurning = true;
+                    log("⚡ МОЛНИЯ УДАРИЛА по ветряку [" + (hit.col + 1) + "," + (hit.row + 1) + "]! Гондола загорелась!");
+                } else {
+                    log("⚡ МОЛНИЯ УДАРИЛА по ветряку [" + (hit.col + 1) + "," + (hit.row + 1) + "]! Изучите громоотвод в лаборатории!");
+                }
             }
         }
     }
@@ -1836,6 +2505,7 @@ public class WindTycoon extends JFrame {
                     Plot p = plots[c][r];
                     if (p.hasTurbine() && p.durability > 0) {
                         p.durability = 0.0;
+                        if (Math.random() < 0.35) p.isBurning = true;
                         brokenCount++;
                         spawnSparkles(c * (canvas.getWidth()/COLS) + 60, r * (canvas.getHeight()/ROWS) + 60, new Color(231, 76, 60));
                     }
@@ -1901,6 +2571,17 @@ public class WindTycoon extends JFrame {
         if (c >= 0 && c < COLS && r >= 0 && r < ROWS) {
             Plot clicked = plots[c][r];
             selectedPlot = clicked;
+
+            if (clicked.isBurning) {
+                clicked.isBurning = false;
+                SoundSystem.play("build");
+                spawnSparkles(mx, my, new Color(100, 200, 255));
+                floatingTexts.add(new FloatingText(mx, my - 20, "🧯 ПОТУШЕНО!", new Color(52, 152, 219)));
+                log("🧯 Вы потушили пожар на слоте [" + (c + 1) + "," + (r + 1) + "]!");
+                updateControlButtons();
+                canvas.repaint();
+                return;
+            }
 
             if (clicked.hasTurbine() && clicked.durability > 0) {
                 clicked.bladeAngle = (clicked.bladeAngle + 50.0) % 360.0;
@@ -2388,6 +3069,52 @@ public class WindTycoon extends JFrame {
             }
         }
 
+        // Кнопка массового ремонта
+        double totalRepCost = 0.0;
+        int brokenCount = 0;
+        int burningCount = 0;
+        for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < ROWS; r++) {
+                Plot p = plots[c][r];
+                if (p.hasTurbine()) {
+                    if (p.isBurning) burningCount++;
+                    if (p.durability < 99.5 || p.isBurning) {
+                        brokenCount++;
+                        double need = (100.0 - p.durability) / 100.0;
+                        totalRepCost += p.turbine.cost * 0.15 * need;
+                    }
+                }
+            }
+        }
+        totalRepCost *= 0.85; // 15% wholesale discount
+        if (brokenCount > 0) {
+            repairAllBtn.setEnabled(balance >= totalRepCost);
+            repairAllBtn.setText("🔧 Починить всё (" + brokenCount + " шт -15%: $" + dfMoney.format(totalRepCost) + ")");
+        } else {
+            repairAllBtn.setEnabled(false);
+            repairAllBtn.setText("✅ Все турбины исправны (100%)");
+        }
+
+        if (burningCount > 0) {
+            extinguishBtn.setVisible(true);
+            extinguishBtn.setEnabled(balance >= 250.0);
+            extinguishBtn.setText("🧯 Потушить пожары (" + burningCount + " шт: $250)");
+        } else {
+            extinguishBtn.setVisible(false);
+        }
+
+        // Кнопки биомов
+        biomeValleyBtn.setText(currentBiome == Biome.VALLEY ? "🌲 Долина [АКТИВ]" : "🌲 Долина");
+        biomeValleyBtn.setEnabled(currentBiome != Biome.VALLEY);
+
+        boolean peaksUnlocked = unlockedBiomes.contains("PEAKS");
+        biomePeaksBtn.setText(currentBiome == Biome.PEAKS ? "🏔️ Горы [АКТИВ]" : (peaksUnlocked ? "🏔️ Горы" : "🏔️ Горы ($15k)"));
+        biomePeaksBtn.setEnabled(currentBiome != Biome.PEAKS);
+
+        boolean oceanUnlocked = unlockedBiomes.contains("OCEAN");
+        biomeOceanBtn.setText(currentBiome == Biome.OCEAN ? "🌊 Шельф [АКТИВ]" : (oceanUnlocked ? "🌊 Шельф" : "🌊 Шельф ($35k)"));
+        biomeOceanBtn.setEnabled(currentBiome != Biome.OCEAN);
+
         // Обновление кнопок Биржи
         if (batteryCapacity <= 0) {
             buyBatteryBtn.setText("🔋 Купить батарею 1,000 кВт⋅ч ($4k)");
@@ -2400,10 +3127,22 @@ public class WindTycoon extends JFrame {
             buyBatteryBtn.setText("🔋 Расширить накопитель (+$" + (int)(batteryCapacity < 5000 ? 14 : 45) + "k)");
         }
 
-        double rate = marketPricePerKwh * marketMultiplier;
+        double rate = marketPricePerKwh * marketMultiplier * ((currentSeason == Season.WINTER) ? 1.35 : 1.0);
         boolean isPeak = marketMultiplier > 1.8;
         marketPriceLbl.setText("Тариф: $" + dfMoney.format(rate) + " / кВт⋅ч " + (isPeak ? "⚡ [ПИКОВЫЙ СПРОС!]" : "[Обычный]"));
         marketPriceLbl.setForeground(isPeak ? new Color(255, 75, 75) : new Color(254, 202, 87));
+
+        if (forecastLbl != null) {
+            if (hiredMeteorologist) {
+                forecastLbl.setText("🌦️ Прогноз: " + nextWeatherCondition + " (~" + dfShort.format(nextTargetWind) + " м/с через " + forecastCountdown + "с)");
+            } else {
+                forecastLbl.setText("🌦️ Прогноз погоды: [Наймите метеоролога в науке]");
+            }
+        }
+
+        if (brokerStatusLbl != null) {
+            brokerStatusLbl.setText("📈 ИИ-Брокер: " + (hiredBroker ? "🟢 АКТИВЕН (авто-сброс на пиках)" : "⚪ Не нанят"));
+        }
 
         double dumpValue = batteryStored * rate;
         sellBatteryBtn.setText("⚡ Сбросить заряд на биржу (+$" + dfMoney.format(dumpValue) + ")");
@@ -2428,6 +3167,16 @@ public class WindTycoon extends JFrame {
         buyDroneBtn.setText("🚁 Купить ремонтного дрона ($5,000) [" + droneCount + " шт]");
         buyDroneBtn.setEnabled(techDronesUnlocked);
 
+        // Специалисты
+        hireMeteorologistBtn.setText(hiredMeteorologist ? "✅ Метеоролог нанят" : "🌦️ Метеоролог ($3.5k / 60 SP)");
+        hireMeteorologistBtn.setEnabled(!hiredMeteorologist);
+
+        hireBrokerBtn.setText(hiredBroker ? "✅ ИИ-Брокер нанят" : "📈 ИИ-Брокер ($7k / 100 SP)");
+        hireBrokerBtn.setEnabled(!hiredBroker);
+
+        hireChiefMechanicBtn.setText(hiredChiefMechanic ? "✅ Главный Механик нанят" : "🛡️ Главный Механик ($5k / 80 SP)");
+        hireChiefMechanicBtn.setEnabled(!hiredChiefMechanic);
+
         // Обновление Rebirth
         rebirthInfoLbl.setText("Бонус: +" + (rebirthCount * 50) + "%  |  Требуется: $100,000 и 6 вышек");
     }
@@ -2449,7 +3198,7 @@ public class WindTycoon extends JFrame {
 
     private void updateUI() {
         balanceVal.setText("$" + dfMoney.format(balance));
-        windVal.setText(dfShort.format(windSpeed) + " м/с • " + weatherCondition);
+        windVal.setText(dfShort.format(windSpeed) + " м/с • " + currentBiome.title + " • " + weatherCondition);
 
         String sign = incomePerSecond >= 0 ? "+$" : "-$";
         powerVal.setText(dfShort.format(currentPowerOutput) + " кВт (" + sign + dfMoney.format(Math.abs(incomePerSecond)) + "/с)");
@@ -2464,14 +3213,13 @@ public class WindTycoon extends JFrame {
         rebirthBadge.setText("R" + rebirthCount + " (x" + dfShort.format(1.0 + rebirthCount * 0.5) + ")");
 
         boolean isNight = (timeOfDay >= 0.45 && timeOfDay <= 0.88);
+        String todStr = isNight ? "🌙 Ночь" : (timeOfDay > 0.38 && timeOfDay < 0.45) ? "🌇 Закат" : "☀️ День";
+        timeBadge.setText(currentSeason.title + " • " + todStr);
         if (isNight) {
-            timeBadge.setText("🌙 Ночь");
             timeBadge.setForeground(new Color(130, 200, 255));
         } else if (timeOfDay > 0.38 && timeOfDay < 0.45) {
-            timeBadge.setText("🌇 Закат");
             timeBadge.setForeground(new Color(255, 159, 67));
         } else {
-            timeBadge.setText("☀️ День");
             timeBadge.setForeground(new Color(255, 234, 167));
         }
 
@@ -2541,12 +3289,38 @@ public class WindTycoon extends JFrame {
             int groundY = (int)(h * 0.12);
             int farmH = (int)(h * 0.72) - groundY;
 
-            Color grassTop = isNight ? new Color(24, 85, 48) : new Color(46, 204, 113);
-            Color grassBot = isNight ? new Color(18, 65, 38) : new Color(39, 174, 96);
+            Color gTop, gBot;
+            if (currentBiome == Biome.OCEAN) {
+                gTop = isNight ? new Color(8, 28, 52) : new Color(20, 85, 145);
+                gBot = isNight ? new Color(4, 16, 32) : new Color(12, 55, 95);
+            } else if (currentBiome == Biome.PEAKS) {
+                if (currentSeason == Season.WINTER) {
+                    gTop = isNight ? new Color(120, 135, 150) : new Color(220, 232, 245);
+                    gBot = isNight ? new Color(80, 95, 110) : new Color(175, 190, 205);
+                } else {
+                    gTop = isNight ? new Color(38, 44, 52) : new Color(95, 105, 115);
+                    gBot = isNight ? new Color(24, 28, 35) : new Color(65, 75, 85);
+                }
+            } else { // VALLEY
+                gTop = isNight ? currentSeason.groundTop.darker().darker() : currentSeason.groundTop;
+                gBot = isNight ? currentSeason.groundBot.darker().darker() : currentSeason.groundBot;
+            }
 
-            GradientPaint groundGrad = new GradientPaint(0, groundY, grassTop, 0, groundY + farmH, grassBot);
+            GradientPaint groundGrad = new GradientPaint(0, groundY, gTop, 0, groundY + farmH, gBot);
             g2.setPaint(groundGrad);
             g2.fillRect(0, groundY, w, farmH);
+
+            if (currentBiome == Biome.OCEAN) {
+                g2.setColor(new Color(255, 255, 255, 30));
+                g2.setStroke(new BasicStroke(1.5f));
+                long wt = System.currentTimeMillis();
+                for (int wy = groundY + 20; wy < groundY + farmH; wy += 35) {
+                    int shift = (int)((wt / 40 + wy * 3) % 80) - 40;
+                    for (int wx = shift - 60; wx < w + 60; wx += 60) {
+                        g2.drawArc(wx, wy, 40, 10, 0, 180);
+                    }
+                }
+            }
 
             int cellW = w / COLS;
             int cellH = farmH / ROWS;
@@ -2591,6 +3365,21 @@ public class WindTycoon extends JFrame {
                 g2.drawLine(pt.x, pt.y, pt.x + windLineLen, pt.y);
             }
 
+            if (currentSeason == Season.WINTER) {
+                g2.setColor(new Color(255, 255, 255, isNight ? 185 : 230));
+                for (int i = 0; i < snowFlakes.size(); i++) {
+                    SnowFlake sf = snowFlakes.get(i);
+                    g2.fillOval((int)sf.x, (int)sf.y, (int)sf.size, (int)sf.size);
+                }
+            }
+
+            for (int i = 0; i < smokeParticles.size(); i++) {
+                SmokeParticle smp = smokeParticles.get(i);
+                int alphaInt = (int)(Math.max(0, Math.min(1, smp.alpha)) * 255);
+                g2.setColor(new Color(smp.color.getRed(), smp.color.getGreen(), smp.color.getBlue(), alphaInt));
+                g2.fillOval((int)smp.x - (int)smp.size / 2, (int)smp.y - (int)smp.size / 2, (int)smp.size, (int)smp.size);
+            }
+
             for (Sparkle sp : sparkles) {
                 g2.setColor(new Color(sp.color.getRed(), sp.color.getGreen(), sp.color.getBlue(), (int)(sp.alpha * 255)));
                 g2.fillOval((int)sp.x - sp.size / 2, (int)sp.y - sp.size / 2, sp.size, sp.size);
@@ -2607,6 +3396,28 @@ public class WindTycoon extends JFrame {
 
             if (comboMultiplier > 1.0 || comboClicks > 0) {
                 drawComboBadge(g2, w / 2, groundY - 12);
+            }
+
+            boolean anyBurning = false;
+            for (int c = 0; c < COLS; c++) {
+                for (int r = 0; r < ROWS; r++) {
+                    if (plots[c][r].isBurning) {
+                        anyBurning = true;
+                        break;
+                    }
+                }
+                if (anyBurning) break;
+            }
+            if (anyBurning) {
+                long pulse = System.currentTimeMillis();
+                int fireAlpha = (int)(180 + 70 * Math.sin(pulse * 0.012));
+                g2.setColor(new Color(231, 76, 60, fireAlpha));
+                g2.fillRoundRect(w / 2 - 190, 52, 380, 30, 10, 10);
+                g2.setColor(Color.WHITE);
+                g2.setFont(new Font(Font.DIALOG, Font.BOLD, 12));
+                String fireTxt = "🔥 АВАРИЯ: ПОЖАР НА ТУРБИНЕ! НАЖМИТЕ ДЛЯ ТУШЕНИЯ!";
+                int fw = g2.getFontMetrics().stringWidth(fireTxt);
+                g2.drawString(fireTxt, w / 2 - fw / 2, 72);
             }
 
             if (tornadoActive) {
@@ -2665,9 +3476,15 @@ public class WindTycoon extends JFrame {
                 g2.fillOval(dx - 2, dy - 2, 4, 4);
 
                 if (d.isWelding && d.targetPlot != null) {
-                    g2.setColor(new Color(0, 230, 255, 200));
-                    g2.setStroke(new BasicStroke(1.5f));
-                    g2.drawLine(dx, dy + 5, dx, dy + 18);
+                    if (d.targetPlot.isBurning) {
+                        g2.setColor(new Color(52, 152, 219, 220));
+                        g2.setStroke(new BasicStroke(2.2f));
+                        g2.drawLine(dx, dy + 5, dx, dy + 22);
+                    } else {
+                        g2.setColor(new Color(0, 230, 255, 200));
+                        g2.setStroke(new BasicStroke(1.5f));
+                        g2.drawLine(dx, dy + 5, dx, dy + 18);
+                    }
                 }
             }
         }
@@ -2804,17 +3621,53 @@ public class WindTycoon extends JFrame {
         private void drawTycoonPlot(Graphics2D g2, int x, int y, int w, int h, Plot plot, boolean isSelected, boolean isNight) {
             int depth = 8;
 
-            g2.setColor(isNight ? new Color(12, 45, 25, 120) : new Color(25, 110, 60, 110));
+            Color sideCol, baseCol, surfCol, selCol, borderCol;
+            if (currentBiome == Biome.OCEAN) {
+                sideCol = isNight ? new Color(10, 25, 45, 140) : new Color(15, 55, 90, 140);
+                baseCol = isNight ? new Color(15, 38, 65) : new Color(24, 75, 120);
+                surfCol = isNight ? new Color(20, 52, 90) : new Color(35, 105, 160);
+                selCol = isNight ? new Color(40, 95, 150) : new Color(52, 152, 219);
+                borderCol = new Color(241, 196, 15);
+            } else if (currentBiome == Biome.PEAKS) {
+                if (currentSeason == Season.WINTER) {
+                    sideCol = isNight ? new Color(60, 70, 80, 140) : new Color(150, 165, 180, 140);
+                    baseCol = isNight ? new Color(75, 85, 95) : new Color(175, 190, 205);
+                    surfCol = isNight ? new Color(105, 118, 132) : new Color(215, 228, 240);
+                    selCol = new Color(245, 250, 255);
+                } else {
+                    sideCol = isNight ? new Color(25, 28, 35, 140) : new Color(60, 68, 78, 140);
+                    baseCol = isNight ? new Color(35, 40, 48) : new Color(80, 90, 100);
+                    surfCol = isNight ? new Color(50, 58, 68) : new Color(110, 120, 132);
+                    selCol = new Color(145, 158, 172);
+                }
+                borderCol = new Color(189, 195, 199);
+            } else { // VALLEY
+                if (currentSeason == Season.WINTER) {
+                    sideCol = isNight ? new Color(90, 105, 120, 130) : new Color(170, 185, 200, 130);
+                    baseCol = isNight ? new Color(110, 125, 140) : new Color(195, 210, 225);
+                    surfCol = isNight ? new Color(130, 148, 165) : new Color(230, 240, 250);
+                    selCol = new Color(255, 255, 255);
+                } else if (currentSeason == Season.AUTUMN) {
+                    sideCol = isNight ? new Color(65, 40, 15, 120) : new Color(130, 80, 30, 120);
+                    baseCol = isNight ? new Color(80, 50, 20) : new Color(165, 100, 35);
+                    surfCol = isNight ? new Color(100, 65, 25) : new Color(195, 125, 45);
+                    selCol = new Color(243, 156, 18);
+                } else {
+                    sideCol = isNight ? new Color(12, 45, 25, 120) : new Color(25, 110, 60, 110);
+                    baseCol = isNight ? new Color(15, 60, 32) : new Color(30, 130, 68);
+                    surfCol = isNight ? new Color(32, 120, 65) : new Color(88, 214, 141);
+                    selCol = isNight ? new Color(50, 170, 100) : new Color(110, 240, 155);
+                }
+                borderCol = isNight ? new Color(45, 150, 80) : new Color(125, 230, 165);
+            }
+
+            g2.setColor(sideCol);
             g2.fillRoundRect(x + 2, y + depth + 4, w - 4, h - depth, 20, 20);
 
-            g2.setColor(isNight ? new Color(15, 60, 32) : new Color(30, 130, 68));
+            g2.setColor(baseCol);
             g2.fillRoundRect(x, y + depth, w, h - depth, 18, 18);
 
-            if (isSelected) {
-                g2.setColor(isNight ? new Color(50, 170, 100) : new Color(110, 240, 155));
-            } else {
-                g2.setColor(isNight ? new Color(32, 120, 65) : new Color(88, 214, 141));
-            }
+            g2.setColor(isSelected ? selCol : surfCol);
             g2.fillRoundRect(x, y, w, h - depth, 18, 18);
 
             if (isSelected) {
@@ -2822,8 +3675,16 @@ public class WindTycoon extends JFrame {
                 g2.setStroke(new BasicStroke(3.5f));
                 g2.drawRoundRect(x, y, w, h - depth, 18, 18);
             } else {
-                g2.setColor(isNight ? new Color(45, 150, 80) : new Color(125, 230, 165));
+                g2.setColor(borderCol);
                 g2.setStroke(new BasicStroke(1.5f));
+                g2.drawRoundRect(x, y, w, h - depth, 18, 18);
+            }
+
+            if (plot.isBurning) {
+                long pulseTime = System.currentTimeMillis();
+                int fireAlpha = (int)(180 + 70 * Math.sin(pulseTime * 0.015));
+                g2.setColor(new Color(231, 76, 60, fireAlpha));
+                g2.setStroke(new BasicStroke(3.5f));
                 g2.drawRoundRect(x, y, w, h - depth, 18, 18);
             }
 
@@ -2841,10 +3702,15 @@ public class WindTycoon extends JFrame {
                 long t = System.currentTimeMillis();
                 float pulse = (float)(0.7 + 0.3 * Math.sin(t * 0.005));
 
-                g2.setColor(new Color(39, 174, 96));
+                Color btnBg1 = (currentBiome == Biome.OCEAN) ? new Color(24, 110, 180) :
+                               (currentBiome == Biome.PEAKS) ? new Color(75, 85, 95) : new Color(39, 174, 96);
+                Color btnBg2 = (currentBiome == Biome.OCEAN) ? new Color(41, 128, 185) :
+                               (currentBiome == Biome.PEAKS) ? new Color(95, 105, 118) : new Color(46, 204, 113);
+
+                g2.setColor(btnBg1);
                 g2.fillRoundRect(padX, padY + 4, padW, padH, 14, 14);
 
-                g2.setColor(new Color(46, 204, 113));
+                g2.setColor(btnBg2);
                 g2.fillRoundRect(padX, padY, padW, padH, 14, 14);
 
                 g2.setColor(new Color(255, 255, 255, (int)(180 * pulse)));
@@ -2853,7 +3719,7 @@ public class WindTycoon extends JFrame {
 
                 g2.setFont(new Font(Font.DIALOG, Font.BOLD, 11));
                 g2.setColor(Color.WHITE);
-                String btnText = "➕ ПОСТРОИТЬ";
+                String btnText = (currentBiome == Biome.OCEAN) ? "➕ ПЛАТФОРМА" : "➕ ПОСТРОИТЬ";
                 int strW = g2.getFontMetrics().stringWidth(btnText);
                 g2.drawString(btnText, cx - strW / 2, padY + 17);
 
@@ -2869,7 +3735,7 @@ public class WindTycoon extends JFrame {
             int mastH = 86;
             int hubCy = baseCy - mastH;
 
-            if (plot.turbine == TurbineType.OFFSHORE) {
+            if (plot.turbine == TurbineType.OFFSHORE || currentBiome == Biome.OCEAN) {
                 g2.setColor(new Color(0, 119, 182, 160));
                 g2.fillOval(cx - 36, baseCy - 12, 72, 24);
                 g2.setColor(new Color(0, 180, 216, 220));
@@ -2877,6 +3743,10 @@ public class WindTycoon extends JFrame {
 
                 g2.setColor(new Color(241, 196, 15));
                 g2.fillRect(cx - 24, baseCy - 8, 48, 6);
+                g2.setColor(new Color(212, 143, 0));
+                g2.setStroke(new BasicStroke(2.0f));
+                g2.drawLine(cx - 18, baseCy - 2, cx - 10, baseCy + 8);
+                g2.drawLine(cx + 18, baseCy - 2, cx + 10, baseCy + 8);
             } else if (plot.turbine == TurbineType.SOLAR_HYBRID) {
                 g2.setColor(new Color(25, 45, 80));
                 g2.fillRoundRect(cx - 32, baseCy - 10, 64, 18, 6, 6);
@@ -3035,6 +3905,21 @@ public class WindTycoon extends JFrame {
                 String broke = "⚠️ СЛОМАН!";
                 int bw = g2.getFontMetrics().stringWidth(broke);
                 g2.drawString(broke, cx - bw / 2, hubCy - 34);
+            }
+
+            if (plot.isBurning) {
+                long pulseTime = System.currentTimeMillis();
+                int flameR = 14 + (int)(Math.sin(pulseTime * 0.02) * 5);
+                g2.setColor(new Color(255, 69, 0, 185));
+                g2.fillOval(cx - flameR, hubCy - flameR, flameR * 2, flameR * 2);
+                g2.setColor(new Color(255, 215, 0, 220));
+                g2.fillOval(cx - flameR / 2, hubCy - flameR / 2, flameR, flameR);
+
+                g2.setFont(new Font(Font.DIALOG, Font.BOLD, 12));
+                g2.setColor(new Color(255, 60, 60));
+                String fireStr = "🔥 ПОЖАР!";
+                int fw = g2.getFontMetrics().stringWidth(fireStr);
+                g2.drawString(fireStr, cx - fw / 2, hubCy - 36);
             }
         }
     }
