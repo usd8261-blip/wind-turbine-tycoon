@@ -9,6 +9,8 @@ import java.awt.geom.Path2D;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.ArrayList;
 import java.awt.datatransfer.StringSelection;
 import java.util.Base64;
@@ -581,17 +583,20 @@ public class WindTycoon extends JFrame {
     private JLabel musicVal;
     private JLabel contractStatusLbl;
 
-    // Панель вкладок справа
+    // Нижняя консоль управления и навигация по вкладкам
     private CardLayout tabCardLayout;
     private JPanel tabCardContainer;
     private StyledButton tabBtnBuild;
     private StyledButton tabBtnMarket;
     private StyledButton tabBtnResearch;
     private StyledButton tabBtnPrestige;
+    private StyledButton tabBtnLog;
+    private JLabel tickerLabel;
 
     // Элементы вкладки "Стройка"
     private JLabel selectedPlotTitle;
     private JLabel selectedPlotSub;
+    private JProgressBar selectedPlotDurabilityBar;
     private StyledButton buildBasicBtn;
     private StyledButton buildAdvBtn;
     private StyledButton buildIndBtn;
@@ -639,8 +644,70 @@ public class WindTycoon extends JFrame {
     private StyledButton saveBtn;
     private StyledButton resetBtn;
 
-    // Журнал
-    private JTextArea eventLog;
+    // Журнал событий (Центр событий)
+    public enum LogCategory {
+        ALL("Все", "🌐", new Color(148, 163, 184)),
+        FINANCE("Финансы", "💰", new Color(46, 204, 113)),
+        BUILD("Стройка", "🔨", new Color(52, 152, 219)),
+        WEATHER("Погода", "🌦️", new Color(241, 196, 15)),
+        INCIDENT("Аварии", "🚨", new Color(231, 76, 60)),
+        SCIENCE("Наука", "🔬", new Color(155, 89, 182)),
+        GENERAL("Инфо", "ℹ️", new Color(0, 210, 211));
+
+        public final String title;
+        public final String icon;
+        public final Color color;
+
+        LogCategory(String title, String icon, Color color) {
+            this.title = title;
+            this.icon = icon;
+            this.color = color;
+        }
+
+        public static LogCategory detect(String msg) {
+            if (msg.contains("💰") || msg.contains("$") || msg.contains("Бирж") || msg.contains("Баланс") || 
+                msg.contains("Продано") || msg.contains("Доход") || msg.contains("Контракт") || msg.contains("грант") || msg.contains("тариф")) {
+                return FINANCE;
+            }
+            if (msg.contains("🔨") || msg.contains("Построен") || msg.contains("Улучшен") || msg.contains("Эволюция") || 
+                msg.contains("Снесен") || msg.contains("Биом") || msg.contains("Долина") || msg.contains("Горы") || msg.contains("Шельф")) {
+                return BUILD;
+            }
+            if (msg.contains("🔥") || msg.contains("ПОЖАР") || msg.contains("⚠️") || msg.contains("Поломка") || 
+                msg.contains("Сломан") || msg.contains("авари") || msg.contains("Потушен") || msg.contains("Тушение") || msg.contains("ТОРНАДО")) {
+                return INCIDENT;
+            }
+            if (msg.contains("🌦️") || msg.contains("Шторм") || msg.contains("Гроза") || msg.contains("Торнадо") || 
+                msg.contains("Сезон") || msg.contains("Ветер") || msg.contains("Штиль") || msg.contains("Бриз") || msg.contains("Молния") || msg.contains("снег")) {
+                return WEATHER;
+            }
+            if (msg.contains("🔬") || msg.contains("SP") || msg.contains("Исследован") || msg.contains("Специалист") || 
+                msg.contains("Метеоролог") || msg.contains("Брокер") || msg.contains("Механик") || msg.contains("Дрон") || 
+                msg.contains("Престиж") || msg.contains("IPO") || msg.contains("Rebirth") || msg.contains("R&D")) {
+                return SCIENCE;
+            }
+            return GENERAL;
+        }
+    }
+
+    public static class LogEntry {
+        public final String time;
+        public final LogCategory category;
+        public final String message;
+
+        public LogEntry(String time, LogCategory category, String message) {
+            this.time = time;
+            this.category = category;
+            this.message = message;
+        }
+    }
+
+    private final List<LogEntry> logEntries = new ArrayList<>();
+    private LogCategory currentLogFilter = LogCategory.ALL;
+    private JTextPane logTextPane;
+    private JLabel logStatsLabel;
+    private JLabel logSummaryStats;
+    private final SimpleDateFormat logTimeFmt = new SimpleDateFormat("HH:mm:ss");
 
     // ==========================================
     // === 5. КОНСТРУКТОР И ИНИЦИАЛИЗАЦИЯ
@@ -648,8 +715,8 @@ public class WindTycoon extends JFrame {
     public WindTycoon() {
         super("⚡ Wind Turbine Tycoon [ULTIMATE EDITION]");
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-        setSize(1280, 890);
-        setMinimumSize(new Dimension(1100, 760));
+        setSize(1320, 920);
+        setMinimumSize(new Dimension(1150, 780));
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
 
@@ -746,136 +813,154 @@ public class WindTycoon extends JFrame {
         });
         add(canvas, BorderLayout.CENTER);
 
-        // === ПРАВАЯ ПАНЕЛЬ С ВКЛАДКАМИ (SIDE PANEL) ===
-        JPanel sidePanel = new JPanel();
-        sidePanel.setLayout(new BoxLayout(sidePanel, BoxLayout.Y_AXIS));
-        sidePanel.setPreferredSize(new Dimension(380, 600));
-        sidePanel.setBackground(new Color(21, 25, 36));
-        sidePanel.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
+        // === НИЖНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ (BOTTOM DECK) ===
+        JPanel bottomDeck = createBottomDeck();
+        add(bottomDeck, BorderLayout.SOUTH);
+        updateControlButtons();
+        switchTab("BUILD");
+    }
 
-        // Карточка Контракта Города
-        JPanel contractCard = new JPanel() {
+    private JPanel createBottomDeck() {
+        JPanel deck = new JPanel(new BorderLayout());
+        deck.setPreferredSize(new Dimension(1300, 275));
+        deck.setBackground(new Color(15, 18, 25));
+        deck.setBorder(BorderFactory.createMatteBorder(2, 0, 0, 0, new Color(38, 48, 66)));
+
+        // 1. Верхняя панель: Переключатели вкладок + Интерактивный новостной тикер
+        JPanel topBar = new JPanel(new BorderLayout(10, 0));
+        topBar.setOpaque(false);
+        topBar.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 12));
+
+        // Вкладки
+        JPanel tabsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        tabsPanel.setOpaque(false);
+
+        tabBtnBuild = new StyledButton("🔨 СТРОИТЕЛЬСТВО", new Color(46, 204, 113), e -> switchTab("BUILD"));
+        tabBtnMarket = new StyledButton("🔋 ЭНЕРГОБИРЖА", new Color(52, 152, 219), e -> switchTab("MARKET"));
+        tabBtnResearch = new StyledButton("🔬 НАУКА & R&D", new Color(155, 89, 182), e -> switchTab("RESEARCH"));
+        tabBtnPrestige = new StyledButton("👑 ПРЕСТИЖ & СИСТЕМА", new Color(241, 196, 15), e -> switchTab("PRESTIGE"));
+        tabBtnLog = new StyledButton("📋 ЦЕНТР СОБЫТИЙ", new Color(0, 210, 211), e -> switchTab("LOG"));
+
+        Dimension tabBtnSize = new Dimension(175, 28);
+        tabBtnBuild.setPreferredSize(tabBtnSize);
+        tabBtnMarket.setPreferredSize(tabBtnSize);
+        tabBtnResearch.setPreferredSize(tabBtnSize);
+        tabBtnPrestige.setPreferredSize(tabBtnSize);
+        tabBtnLog.setPreferredSize(tabBtnSize);
+
+        tabsPanel.add(tabBtnBuild);
+        tabsPanel.add(tabBtnMarket);
+        tabsPanel.add(tabBtnResearch);
+        tabsPanel.add(tabBtnPrestige);
+        tabsPanel.add(tabBtnLog);
+
+        // Интерактивный тикер
+        JPanel tickerBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 2)) {
             @Override
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(28, 38, 54));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 12, 12);
-                g2.setColor(new Color(0, 180, 216));
-                g2.setStroke(new BasicStroke(1.5f));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+                g2.setColor(new Color(24, 30, 44));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
+                g2.setColor(new Color(45, 55, 75));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 8, 8);
                 g2.dispose();
             }
         };
-        contractCard.setLayout(new BoxLayout(contractCard, BoxLayout.Y_AXIS));
-        contractCard.setOpaque(false);
-        contractCard.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
-        contractCard.setMaximumSize(new Dimension(360, 58));
-        contractCard.setPreferredSize(new Dimension(360, 58));
+        tickerBar.setOpaque(false);
+        tickerBar.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        tickerBar.setToolTipText("Нажмите, чтобы открыть подробный Центр событий (Журнал)");
+        tickerBar.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                switchTab("LOG");
+            }
+        });
 
-        JLabel contractHeader = new JLabel("🏙️ КОНТРАКТ ГОРОДА");
-        contractHeader.setFont(new Font(Font.DIALOG, Font.BOLD, 11));
-        contractHeader.setForeground(new Color(0, 210, 211));
+        JLabel tickerIcon = new JLabel("📢 ПОСЛЕДНЕЕ:");
+        tickerIcon.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        tickerIcon.setForeground(new Color(254, 202, 87));
 
-        contractStatusLbl = new JLabel("Ожидание заказа мэрии...");
-        contractStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 11));
-        contractStatusLbl.setForeground(Color.WHITE);
+        tickerLabel = new JLabel("Добро пожаловать в Wind Turbine Tycoon!");
+        tickerLabel.setFont(new Font(Font.DIALOG, Font.PLAIN, 11));
+        tickerLabel.setForeground(new Color(220, 235, 255));
+        tickerLabel.setPreferredSize(new Dimension(340, 20));
 
-        contractCard.add(contractHeader);
-        contractCard.add(Box.createRigidArea(new Dimension(0, 2)));
-        contractCard.add(contractStatusLbl);
-        sidePanel.add(contractCard);
+        tickerBar.add(tickerIcon);
+        tickerBar.add(tickerLabel);
 
-        sidePanel.add(Box.createRigidArea(new Dimension(0, 8)));
+        topBar.add(tabsPanel, BorderLayout.WEST);
+        topBar.add(tickerBar, BorderLayout.EAST);
 
-        // Панель кнопок переключения вкладок (2x2)
-        JPanel tabButtonsGrid = new JPanel(new GridLayout(2, 2, 6, 5));
-        tabButtonsGrid.setOpaque(false);
-        tabButtonsGrid.setMaximumSize(new Dimension(360, 64));
-        tabButtonsGrid.setPreferredSize(new Dimension(360, 64));
+        deck.add(topBar, BorderLayout.NORTH);
 
-        tabBtnBuild = new StyledButton("🔨 Стройка", new Color(46, 204, 113), e -> switchTab("BUILD"));
-        tabBtnMarket = new StyledButton("🔋 Биржа", new Color(52, 152, 219), e -> switchTab("MARKET"));
-        tabBtnResearch = new StyledButton("🔬 Наука", new Color(155, 89, 182), e -> switchTab("RESEARCH"));
-        tabBtnPrestige = new StyledButton("👑 Престиж", new Color(241, 196, 15), e -> switchTab("PRESTIGE"));
-
-        tabButtonsGrid.add(tabBtnBuild);
-        tabButtonsGrid.add(tabBtnMarket);
-        tabButtonsGrid.add(tabBtnResearch);
-        tabButtonsGrid.add(tabBtnPrestige);
-        sidePanel.add(tabButtonsGrid);
-
-        sidePanel.add(Box.createRigidArea(new Dimension(0, 8)));
-
-        // Контейнер с CardLayout для 4 вкладок
+        // 2. Карточный контейнер вкладок
         tabCardLayout = new CardLayout();
         tabCardContainer = new JPanel(tabCardLayout);
         tabCardContainer.setOpaque(false);
+        tabCardContainer.setBorder(BorderFactory.createEmptyBorder(2, 12, 8, 12));
 
         tabCardContainer.add(createBuildTab(), "BUILD");
         tabCardContainer.add(createMarketTab(), "MARKET");
         tabCardContainer.add(createResearchTab(), "RESEARCH");
         tabCardContainer.add(createPrestigeTab(), "PRESTIGE");
+        tabCardContainer.add(createLogTab(), "LOG");
 
-        sidePanel.add(tabCardContainer);
-
-        sidePanel.add(Box.createRigidArea(new Dimension(0, 6)));
-
-        // Журнал событий внизу
-        JLabel logLabel = new JLabel("📋 ЖУРНАЛ СОБЫТИЙ");
-        logLabel.setForeground(new Color(150, 170, 195));
-        logLabel.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
-        sidePanel.add(logLabel);
-        sidePanel.add(Box.createRigidArea(new Dimension(0, 3)));
-
-        eventLog = new JTextArea(4, 20);
-        eventLog.setEditable(false);
-        eventLog.setBackground(new Color(15, 18, 25));
-        eventLog.setForeground(new Color(200, 220, 240));
-        eventLog.setFont(new Font(Font.DIALOG, Font.PLAIN, 11));
-        eventLog.setLineWrap(true);
-        eventLog.setWrapStyleWord(true);
-        eventLog.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
-
-        JScrollPane logScroll = new JScrollPane(eventLog);
-        logScroll.setBorder(BorderFactory.createLineBorder(new Color(38, 48, 66)));
-        logScroll.setMaximumSize(new Dimension(360, 95));
-        logScroll.setPreferredSize(new Dimension(360, 95));
-        sidePanel.add(logScroll);
-
-        add(sidePanel, BorderLayout.EAST);
-        updateControlButtons();
+        deck.add(tabCardContainer, BorderLayout.CENTER);
+        return deck;
     }
 
-    private void switchTab(String tabName) {
-        tabCardLayout.show(tabCardContainer, tabName);
-        SoundSystem.play("click");
-    }
-
-    // === ВКЛАДКА 1: СТРОЙКА ===
-    private JPanel createBuildTab() {
-        JPanel p = new JPanel();
-        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-        p.setOpaque(false);
-
-        // Карточка выбранного слота
-        JPanel slotCard = new JPanel() {
+    private JPanel createCardPanel(String title, Color accentColor) {
+        JPanel card = new JPanel() {
             @Override
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(30, 36, 50));
+                g2.setColor(new Color(22, 27, 38));
                 g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
-                g2.setColor(new Color(50, 62, 82));
+                g2.setColor(new Color(40, 50, 68));
                 g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
                 g2.dispose();
             }
         };
-        slotCard.setLayout(new BoxLayout(slotCard, BoxLayout.Y_AXIS));
-        slotCard.setOpaque(false);
-        slotCard.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
-        slotCard.setMaximumSize(new Dimension(360, 50));
-        slotCard.setPreferredSize(new Dimension(360, 50));
+        card.setLayout(new BorderLayout(0, 6));
+        card.setOpaque(false);
+        card.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+
+        if (title != null && !title.isEmpty()) {
+            JLabel header = new JLabel(title);
+            header.setFont(new Font(Font.DIALOG, Font.BOLD, 11));
+            header.setForeground(accentColor != null ? accentColor : new Color(0, 210, 211));
+            card.add(header, BorderLayout.NORTH);
+        }
+        return card;
+    }
+
+    private void switchTab(String tabName) {
+        tabCardLayout.show(tabCardContainer, tabName);
+        updateTabButtonStyles(tabName);
+        SoundSystem.play("click");
+    }
+
+    private void updateTabButtonStyles(String activeTab) {
+        if (tabBtnBuild == null) return;
+        tabBtnBuild.setBaseColor("BUILD".equals(activeTab) ? new Color(46, 204, 113) : new Color(32, 42, 56));
+        tabBtnMarket.setBaseColor("MARKET".equals(activeTab) ? new Color(52, 152, 219) : new Color(32, 42, 56));
+        tabBtnResearch.setBaseColor("RESEARCH".equals(activeTab) ? new Color(155, 89, 182) : new Color(32, 42, 56));
+        tabBtnPrestige.setBaseColor("PRESTIGE".equals(activeTab) ? new Color(241, 196, 15) : new Color(32, 42, 56));
+        tabBtnLog.setBaseColor("LOG".equals(activeTab) ? new Color(0, 210, 211) : new Color(32, 42, 56));
+    }
+
+    // === ВКЛАДКА 1: СТРОИТЕЛЬСТВО & БИОМЫ ===
+    private JPanel createBuildTab() {
+        JPanel p = new JPanel(new GridLayout(1, 3, 10, 0));
+        p.setOpaque(false);
+
+        // Колонка 1: Выбранный участок
+        JPanel col1 = createCardPanel("📍 ВЫБРАННЫЙ УЧАСТОК", new Color(0, 210, 211));
+        JPanel slotContent = new JPanel();
+        slotContent.setLayout(new BoxLayout(slotContent, BoxLayout.Y_AXIS));
+        slotContent.setOpaque(false);
 
         selectedPlotTitle = new JLabel("Участок не выбран");
         selectedPlotTitle.setForeground(Color.WHITE);
@@ -885,17 +970,50 @@ public class WindTycoon extends JFrame {
         selectedPlotSub.setForeground(new Color(160, 180, 205));
         selectedPlotSub.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
 
-        slotCard.add(selectedPlotTitle);
-        slotCard.add(Box.createRigidArea(new Dimension(0, 2)));
-        slotCard.add(selectedPlotSub);
-        p.add(slotCard);
+        selectedPlotDurabilityBar = new JProgressBar(0, 100);
+        selectedPlotDurabilityBar.setValue(0);
+        selectedPlotDurabilityBar.setStringPainted(true);
+        selectedPlotDurabilityBar.setString("0%");
+        selectedPlotDurabilityBar.setForeground(new Color(46, 204, 113));
+        selectedPlotDurabilityBar.setBackground(new Color(15, 20, 30));
+        selectedPlotDurabilityBar.setBorderPainted(false);
+        selectedPlotDurabilityBar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 16));
 
-        p.add(Box.createRigidArea(new Dimension(0, 5)));
+        upgradeBtn = new StyledButton("🚀 Эволюция модели", new Color(241, 196, 15), e -> upgradeSelectedTurbine());
+        upgradeBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        // Кнопки постройки в 2 колонки
-        JPanel buildGrid = new JPanel(new GridLayout(3, 2, 5, 5));
+        JPanel repDemoGrid = new JPanel(new GridLayout(1, 2, 5, 0));
+        repDemoGrid.setOpaque(false);
+        repDemoGrid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+
+        repairBtn = new StyledButton("🔧 Починить ($0)", new Color(230, 126, 34), e -> repairSelectedTurbine());
+        demolishBtn = new StyledButton("🗑️ Снести (50%)", new Color(192, 57, 43), e -> demolishSelectedTurbine());
+        repDemoGrid.add(repairBtn);
+        repDemoGrid.add(demolishBtn);
+
+        extinguishBtn = new StyledButton("🧯 Потушить пожары ($250)", new Color(231, 76, 60), e -> extinguishAllFires());
+        extinguishBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        extinguishBtn.setVisible(false);
+
+        slotContent.add(selectedPlotTitle);
+        slotContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        slotContent.add(selectedPlotSub);
+        slotContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        slotContent.add(selectedPlotDurabilityBar);
+        slotContent.add(Box.createRigidArea(new Dimension(0, 8)));
+        slotContent.add(upgradeBtn);
+        slotContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        slotContent.add(repDemoGrid);
+        slotContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        slotContent.add(extinguishBtn);
+
+        col1.add(slotContent, BorderLayout.CENTER);
+        p.add(col1);
+
+        // Колонка 2: Каталог турбин
+        JPanel col2 = createCardPanel("🏭 КАТАЛОГ ВЕТРЯКОВ", new Color(46, 204, 113));
+        JPanel buildGrid = new JPanel(new GridLayout(3, 2, 6, 6));
         buildGrid.setOpaque(false);
-        buildGrid.setMaximumSize(new Dimension(360, 105));
 
         buildBasicBtn = new StyledButton("🔨 Малый ($1k)", new Color(46, 204, 113), e -> handleBuildOrUpgrade(TurbineType.BASIC));
         buildAdvBtn = new StyledButton("⚡ Средний ($3.2k)", new Color(52, 152, 219), e -> handleBuildOrUpgrade(TurbineType.ADVANCED));
@@ -910,91 +1028,57 @@ public class WindTycoon extends JFrame {
         buildGrid.add(buildOffshoreBtn);
         buildGrid.add(buildSolarBtn);
         buildGrid.add(buildVawtBtn);
-        p.add(buildGrid);
+        col2.add(buildGrid, BorderLayout.CENTER);
+        p.add(col2);
 
-        p.add(Box.createRigidArea(new Dimension(0, 5)));
+        // Колонка 3: Обслуживание, биомы и персонал
+        JPanel col3 = createCardPanel("🌐 ИНФРАСТРУКТУРА & БИОМЫ", new Color(241, 196, 15));
+        JPanel infraContent = new JPanel();
+        infraContent.setLayout(new BoxLayout(infraContent, BoxLayout.Y_AXIS));
+        infraContent.setOpaque(false);
 
-        // Кнопка эволюции модели
-        upgradeBtn = new StyledButton("🚀 Эволюция модели", new Color(241, 196, 15), e -> upgradeSelectedTurbine());
-        p.add(upgradeBtn);
-
-        p.add(Box.createRigidArea(new Dimension(0, 5)));
-
-        // Ремонт и Демонтаж
-        JPanel repDemoGrid = new JPanel(new GridLayout(1, 2, 5, 0));
-        repDemoGrid.setOpaque(false);
-        repDemoGrid.setMaximumSize(new Dimension(360, 28));
-
-        repairBtn = new StyledButton("🔧 Починить ($0)", new Color(230, 126, 34), e -> repairSelectedTurbine());
-        demolishBtn = new StyledButton("🗑️ Снести (50%)", new Color(192, 57, 43), e -> demolishSelectedTurbine());
-        repDemoGrid.add(repairBtn);
-        repDemoGrid.add(demolishBtn);
-        p.add(repDemoGrid);
-
-        p.add(Box.createRigidArea(new Dimension(0, 5)));
-
-        // Массовый ремонт и Пожарная безопасность
         repairAllBtn = new StyledButton("🔧 Починить всё ($0.00)", new Color(39, 174, 96), e -> repairAllTurbines());
-        extinguishBtn = new StyledButton("🧯 Потушить пожары ($250)", new Color(231, 76, 60), e -> extinguishAllFires());
-        extinguishBtn.setVisible(false);
+        repairAllBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        p.add(repairAllBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 4)));
-        p.add(extinguishBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
-
-        // Панель выбора биомов
         JPanel biomeBar = new JPanel(new GridLayout(1, 3, 4, 0));
         biomeBar.setOpaque(false);
-        biomeBar.setMaximumSize(new Dimension(360, 26));
+        biomeBar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         biomeValleyBtn = new StyledButton("🌲 Долина", new Color(46, 204, 113), e -> selectBiome(Biome.VALLEY));
-        biomePeaksBtn = new StyledButton("🏔️ Горы ($15k)", new Color(149, 165, 166), e -> selectBiome(Biome.PEAKS));
-        biomeOceanBtn = new StyledButton("🌊 Шельф ($35k)", new Color(52, 152, 219), e -> selectBiome(Biome.OCEAN));
+        biomePeaksBtn = new StyledButton("🏔️ Горы", new Color(149, 165, 166), e -> selectBiome(Biome.PEAKS));
+        biomeOceanBtn = new StyledButton("🌊 Шельф", new Color(52, 152, 219), e -> selectBiome(Biome.OCEAN));
         biomeBar.add(biomeValleyBtn);
         biomeBar.add(biomePeaksBtn);
         biomeBar.add(biomeOceanBtn);
-        p.add(biomeBar);
 
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
-
-        // Персонал и Страховка
         hireEngineerBtn = new StyledButton("👷 Нанять техника ($250, -$1/с)", new Color(26, 188, 156), e -> hireEngineer());
+        hireEngineerBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         insuranceToggleBtn = new StyledButton("📜 Оформить страховку ($10/мес)", new Color(41, 128, 185), e -> toggleInsurance());
+        insuranceToggleBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        p.add(hireEngineerBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 5)));
-        p.add(insuranceToggleBtn);
+        infraContent.add(repairAllBtn);
+        infraContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        infraContent.add(biomeBar);
+        infraContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        infraContent.add(hireEngineerBtn);
+        infraContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        infraContent.add(insuranceToggleBtn);
+
+        col3.add(infraContent, BorderLayout.CENTER);
+        p.add(col3);
 
         return p;
     }
 
-    // === ВКЛАДКА 2: БАТАРЕЯ И БИРЖА ===
+    // === ВКЛАДКА 2: ЭНЕРГОБИРЖА & КОНТРАКТЫ ===
     private JPanel createMarketTab() {
-        JPanel p = new JPanel();
-        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        JPanel p = new JPanel(new GridLayout(1, 3, 10, 0));
         p.setOpaque(false);
 
-        // Карточка аккумулятора
-        JPanel batCard = new JPanel() {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(25, 35, 50));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
-                g2.setColor(new Color(52, 152, 219));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
-                g2.dispose();
-            }
-        };
-        batCard.setLayout(new BoxLayout(batCard, BoxLayout.Y_AXIS));
-        batCard.setOpaque(false);
-        batCard.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
-        batCard.setMaximumSize(new Dimension(360, 85));
-
-        JLabel batTitle = new JLabel("🔋 ПОДСТАНЦИЯ НАКОПИТЕЛЕЙ");
-        batTitle.setFont(new Font(Font.DIALOG, Font.BOLD, 11));
-        batTitle.setForeground(new Color(52, 152, 219));
+        // Колонка 1: Подстанция накопителей
+        JPanel col1 = createCardPanel("🔋 ПОДСТАНЦИЯ НАКОПИТЕЛЕЙ", new Color(52, 152, 219));
+        JPanel batContent = new JPanel();
+        batContent.setLayout(new BoxLayout(batContent, BoxLayout.Y_AXIS));
+        batContent.setOpaque(false);
 
         batteryStatusLbl = new JLabel("Хранилище: 0 / 0 кВт⋅ч (0%)");
         batteryStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 11));
@@ -1005,77 +1089,55 @@ public class WindTycoon extends JFrame {
         batteryProgressBar.setForeground(new Color(0, 210, 211));
         batteryProgressBar.setBackground(new Color(15, 20, 30));
         batteryProgressBar.setBorderPainted(false);
-        batteryProgressBar.setPreferredSize(new Dimension(330, 12));
+        batteryProgressBar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 16));
 
-        batCard.add(batTitle);
-        batCard.add(Box.createRigidArea(new Dimension(0, 3)));
-        batCard.add(batteryStatusLbl);
-        batCard.add(Box.createRigidArea(new Dimension(0, 5)));
-        batCard.add(batteryProgressBar);
-        p.add(batCard);
+        buyBatteryBtn = new StyledButton("🔋 Купить батарею 1,000 кВт⋅ч ($4k)", new Color(41, 128, 185), e -> upgradeBattery());
+        buyBatteryBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
+        sellBatteryBtn = new StyledButton("⚡ Сбросить заряд на биржу ($0.00)", new Color(230, 126, 34), e -> dumpBatteryToMarket());
+        sellBatteryBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        buyBatteryBtn = new StyledButton("🔋 Купить батарею 1,000 кВт⋅ч ($4,000)", new Color(41, 128, 185), e -> upgradeBattery());
-        p.add(buyBatteryBtn);
+        batContent.add(batteryStatusLbl);
+        batContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        batContent.add(batteryProgressBar);
+        batContent.add(Box.createRigidArea(new Dimension(0, 10)));
+        batContent.add(buyBatteryBtn);
+        batContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        batContent.add(sellBatteryBtn);
+        col1.add(batContent, BorderLayout.CENTER);
+        p.add(col1);
 
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
-
-        // Карточка Биржи энергии
-        JPanel marketCard = new JPanel() {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(35, 30, 45));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
-                g2.setColor(new Color(155, 89, 182));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
-                g2.dispose();
-            }
-        };
-        marketCard.setLayout(new BoxLayout(marketCard, BoxLayout.Y_AXIS));
-        marketCard.setOpaque(false);
-        marketCard.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
-        marketCard.setMaximumSize(new Dimension(360, 58));
-
-        JLabel mTitle = new JLabel("📊 БИРЖА ЭЛЕКТРОЭНЕРГИИ");
-        mTitle.setFont(new Font(Font.DIALOG, Font.BOLD, 11));
-        mTitle.setForeground(new Color(155, 89, 182));
+        // Колонка 2: Биржа и контракт города
+        JPanel col2 = createCardPanel("📊 БИРЖА & КОНТРАКТЫ", new Color(155, 89, 182));
+        JPanel mktContent = new JPanel();
+        mktContent.setLayout(new BoxLayout(mktContent, BoxLayout.Y_AXIS));
+        mktContent.setOpaque(false);
 
         marketPriceLbl = new JLabel("Тариф: $0.18 / кВт⋅ч [Обычный]");
         marketPriceLbl.setFont(new Font(Font.DIALOG, Font.BOLD, 11));
         marketPriceLbl.setForeground(new Color(254, 202, 87));
 
-        marketCard.add(mTitle);
-        marketCard.add(Box.createRigidArea(new Dimension(0, 2)));
-        marketCard.add(marketPriceLbl);
-        p.add(marketCard);
+        JLabel contractHeader = new JLabel("🏙️ ТЕНДЕР МЭРИИ ГОРОДА:");
+        contractHeader.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        contractHeader.setForeground(new Color(0, 210, 211));
 
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
+        contractStatusLbl = new JLabel("Ожидание заказа мэрии...");
+        contractStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 11));
+        contractStatusLbl.setForeground(Color.WHITE);
 
-        sellBatteryBtn = new StyledButton("⚡ Сбросить заряд на биржу ($0.00)", new Color(230, 126, 34), e -> dumpBatteryToMarket());
-        p.add(sellBatteryBtn);
+        mktContent.add(marketPriceLbl);
+        mktContent.add(Box.createRigidArea(new Dimension(0, 10)));
+        mktContent.add(contractHeader);
+        mktContent.add(Box.createRigidArea(new Dimension(0, 4)));
+        mktContent.add(contractStatusLbl);
+        col2.add(mktContent, BorderLayout.CENTER);
+        p.add(col2);
 
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
-
-        // Карточка прогноза и ИИ-Брокера
-        JPanel forecastCard = new JPanel() {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(24, 32, 48));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
-                g2.setColor(new Color(41, 128, 185));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
-                g2.dispose();
-            }
-        };
-        forecastCard.setLayout(new BoxLayout(forecastCard, BoxLayout.Y_AXIS));
-        forecastCard.setOpaque(false);
-        forecastCard.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
-        forecastCard.setMaximumSize(new Dimension(360, 50));
+        // Колонка 3: Прогноз погоды и ИИ-брокер
+        JPanel col3 = createCardPanel("🌦️ СИТУАЦИОННЫЙ ЦЕНТР", new Color(0, 180, 216));
+        JPanel fcContent = new JPanel();
+        fcContent.setLayout(new BoxLayout(fcContent, BoxLayout.Y_AXIS));
+        fcContent.setOpaque(false);
 
         forecastLbl = new JLabel("🌦️ Прогноз погоды: [Наймите метеоролога]");
         forecastLbl.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
@@ -1085,148 +1147,210 @@ public class WindTycoon extends JFrame {
         brokerStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
         brokerStatusLbl.setForeground(new Color(175, 190, 210));
 
-        forecastCard.add(forecastLbl);
-        forecastCard.add(Box.createRigidArea(new Dimension(0, 2)));
-        forecastCard.add(brokerStatusLbl);
-        p.add(forecastCard);
+        JLabel hintLbl = new JLabel("<html><font color='#94A3B8'>💡 Метеоролог предсказывает погоду, а ИИ-брокер автоматически продает заряд на пиках цен.</font></html>");
+        hintLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
+
+        fcContent.add(forecastLbl);
+        fcContent.add(Box.createRigidArea(new Dimension(0, 8)));
+        fcContent.add(brokerStatusLbl);
+        fcContent.add(Box.createRigidArea(new Dimension(0, 10)));
+        fcContent.add(hintLbl);
+        col3.add(fcContent, BorderLayout.CENTER);
+        p.add(col3);
 
         return p;
     }
 
     // === ВКЛАДКА 3: ДЕРЕВО ИССЛЕДОВАНИЙ (R&D) ===
     private JPanel createResearchTab() {
-        JPanel p = new JPanel();
-        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        JPanel p = new JPanel(new GridLayout(1, 3, 10, 0));
         p.setOpaque(false);
 
-        // Карточка очков науки
-        JPanel spCard = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
-        spCard.setBackground(new Color(30, 24, 45));
-        spCard.setBorder(BorderFactory.createLineBorder(new Color(155, 89, 182)));
-        spCard.setMaximumSize(new Dimension(360, 36));
+        // Колонка 1: Очки науки и базовые исследования
+        JPanel col1 = createCardPanel("🔬 ЛАБОРАТОРИЯ (R&D)", new Color(155, 89, 182));
+        JPanel spContent = new JPanel();
+        spContent.setLayout(new BoxLayout(spContent, BoxLayout.Y_AXIS));
+        spContent.setOpaque(false);
 
-        scienceBalanceLbl = new JLabel("🔬 Очки исследований: 0.0 SP");
+        scienceBalanceLbl = new JLabel("🔬 Научный баланс: 0.0 SP");
         scienceBalanceLbl.setFont(new Font(Font.DIALOG, Font.BOLD, 12));
         scienceBalanceLbl.setForeground(new Color(230, 180, 255));
-        spCard.add(scienceBalanceLbl);
-        p.add(spCard);
 
-        p.add(Box.createRigidArea(new Dimension(0, 5)));
+        upgAeroBtn = new StyledButton("🍃 Аэродинамика Lv.1 (40 SP)", new Color(46, 204, 113), e -> researchAero());
+        upgAeroBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        upgCarbonBtn = new StyledButton("🛡️ Углепластик Lv.1 (50 SP)", new Color(52, 152, 219), e -> researchCarbon());
+        upgCarbonBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        upgAeroBtn = new StyledButton("🍃 Аэродинамика лопастей Lv.1 (40 SP)", new Color(46, 204, 113), e -> researchAero());
-        upgCarbonBtn = new StyledButton("🛡️ Углепластиковые сплавы Lv.1 (50 SP)", new Color(52, 152, 219), e -> researchCarbon());
-        upgLightningBtn = new StyledButton("⚡ Громоотвод и защита сети (100 SP)", new Color(241, 196, 15), e -> researchLightning());
+        spContent.add(scienceBalanceLbl);
+        spContent.add(Box.createRigidArea(new Dimension(0, 10)));
+        spContent.add(upgAeroBtn);
+        spContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        spContent.add(upgCarbonBtn);
+        col1.add(spContent, BorderLayout.CENTER);
+        p.add(col1);
+
+        // Колонка 2: Защита и Дроны
+        JPanel col2 = createCardPanel("⚡ ИНЖЕНЕРНЫЕ СИСТЕМЫ", new Color(230, 126, 34));
+        JPanel techContent = new JPanel();
+        techContent.setLayout(new BoxLayout(techContent, BoxLayout.Y_AXIS));
+        techContent.setOpaque(false);
+
+        upgLightningBtn = new StyledButton("⚡ Громоотвод (100 SP)", new Color(241, 196, 15), e -> researchLightning());
+        upgLightningBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         upgRadarBtn = new StyledButton("📡 Радар раннего оповещения (150 SP)", new Color(155, 89, 182), e -> researchRadar());
-        upgDronesUnlockBtn = new StyledButton("🤖 Чертеж ремонтных дронов (220 SP)", new Color(230, 126, 34), e -> researchDrones());
+        upgRadarBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        upgDronesUnlockBtn = new StyledButton("🤖 Чертеж дронов (220 SP)", new Color(230, 126, 34), e -> researchDrones());
+        upgDronesUnlockBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         buyDroneBtn = new StyledButton("🚁 Купить ремонтного дрона ($5,000)", new Color(26, 188, 156), e -> buyDrone());
+        buyDroneBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        p.add(upgAeroBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 4)));
-        p.add(upgCarbonBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 4)));
-        p.add(upgLightningBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 4)));
-        p.add(upgRadarBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 4)));
-        p.add(upgDronesUnlockBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 4)));
-        p.add(buyDroneBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
+        techContent.add(upgLightningBtn);
+        techContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        techContent.add(upgRadarBtn);
+        techContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        techContent.add(upgDronesUnlockBtn);
+        techContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        techContent.add(buyDroneBtn);
+        col2.add(techContent, BorderLayout.CENTER);
+        p.add(col2);
 
-        JLabel staffTitle = new JLabel("👔 ШТАБ СПЕЦИАЛИСТОВ");
-        staffTitle.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
-        staffTitle.setForeground(new Color(254, 202, 87));
-        p.add(staffTitle);
-        p.add(Box.createRigidArea(new Dimension(0, 3)));
+        // Колонка 3: Специалисты
+        JPanel col3 = createCardPanel("👔 ШТАБ СПЕЦИАЛИСТОВ", new Color(254, 202, 87));
+        JPanel staffContent = new JPanel();
+        staffContent.setLayout(new BoxLayout(staffContent, BoxLayout.Y_AXIS));
+        staffContent.setOpaque(false);
 
         hireMeteorologistBtn = new StyledButton("🌦️ Метеоролог ($3.5k / 60 SP)", new Color(0, 180, 216), e -> hireSpecialist("METEOROLOGIST"));
+        hireMeteorologistBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         hireBrokerBtn = new StyledButton("📈 ИИ-Брокер ($7k / 100 SP)", new Color(155, 89, 182), e -> hireSpecialist("BROKER"));
+        hireBrokerBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
         hireChiefMechanicBtn = new StyledButton("🛡️ Главный Механик ($5k / 80 SP)", new Color(243, 156, 18), e -> hireSpecialist("MECHANIC"));
+        hireChiefMechanicBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        p.add(hireMeteorologistBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 4)));
-        p.add(hireBrokerBtn);
-        p.add(Box.createRigidArea(new Dimension(0, 4)));
-        p.add(hireChiefMechanicBtn);
+        staffContent.add(hireMeteorologistBtn);
+        staffContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        staffContent.add(hireBrokerBtn);
+        staffContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        staffContent.add(hireChiefMechanicBtn);
+        col3.add(staffContent, BorderLayout.CENTER);
+        p.add(col3);
 
         return p;
     }
 
-    // === ВКЛАДКА 4: ПРЕСТИЖ (REBIRTH) И ДОСТИЖЕНИЯ ===
+    // === ВКЛАДКА 4: ПРЕСТИЖ (REBIRTH) И СОХРАНЕНИЯ ===
     private JPanel createPrestigeTab() {
-        JPanel p = new JPanel();
-        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        JPanel p = new JPanel(new GridLayout(1, 3, 10, 0));
         p.setOpaque(false);
 
-        // Карточка Rebirth
-        JPanel rebCard = new JPanel() {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(40, 32, 20));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
-                g2.setColor(new Color(241, 196, 15));
-                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
-                g2.dispose();
-            }
-        };
-        rebCard.setLayout(new BoxLayout(rebCard, BoxLayout.Y_AXIS));
-        rebCard.setOpaque(false);
-        rebCard.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
-        rebCard.setMaximumSize(new Dimension(360, 60));
-
-        JLabel rebTitle = new JLabel("👑 ВЫХОД НА IPO (REBIRTH)");
-        rebTitle.setFont(new Font(Font.DIALOG, Font.BOLD, 11));
-        rebTitle.setForeground(new Color(241, 196, 15));
+        // Колонка 1: Rebirth
+        JPanel col1 = createCardPanel("👑 ВЫХОД НА IPO (REBIRTH)", new Color(241, 196, 15));
+        JPanel rebContent = new JPanel();
+        rebContent.setLayout(new BoxLayout(rebContent, BoxLayout.Y_AXIS));
+        rebContent.setOpaque(false);
 
         rebirthInfoLbl = new JLabel("Бонус: +0%  |  Требуется: $100,000 и 6 вышек");
         rebirthInfoLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
         rebirthInfoLbl.setForeground(Color.WHITE);
 
-        rebCard.add(rebTitle);
-        rebCard.add(Box.createRigidArea(new Dimension(0, 2)));
-        rebCard.add(rebirthInfoLbl);
-        p.add(rebCard);
-
-        p.add(Box.createRigidArea(new Dimension(0, 5)));
-
         rebirthBtn = new StyledButton("🌟 СОВЕРШИТЬ REBIRTH (+50% доход)", new Color(241, 196, 15), e -> triggerRebirth());
-        p.add(rebirthBtn);
+        rebirthBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
 
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
+        JLabel rebDesc = new JLabel("<html><font color='#94A3B8'>Сброс поля и баланса в обмен на вечный множитель прибыли +50% и стартовые токены.</font></html>");
+        rebDesc.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
 
-        // Панель достижений
-        JLabel achTitle = new JLabel("🏆 ДОСТИЖЕНИЯ ТАЙКУНА");
-        achTitle.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
-        achTitle.setForeground(new Color(180, 200, 225));
-        p.add(achTitle);
-        p.add(Box.createRigidArea(new Dimension(0, 3)));
+        rebContent.add(rebirthInfoLbl);
+        rebContent.add(Box.createRigidArea(new Dimension(0, 8)));
+        rebContent.add(rebirthBtn);
+        rebContent.add(Box.createRigidArea(new Dimension(0, 8)));
+        rebContent.add(rebDesc);
+        col1.add(rebContent, BorderLayout.CENTER);
+        p.add(col1);
 
+        // Колонка 2: Достижения
+        JPanel col2 = createCardPanel("🏆 ДОСТИЖЕНИЯ ТАЙКУНА", new Color(46, 204, 113));
         achievementsPanel = new JPanel(new GridLayout(4, 2, 4, 3));
         achievementsPanel.setOpaque(false);
-        achievementsPanel.setMaximumSize(new Dimension(360, 75));
-        p.add(achievementsPanel);
+        col2.add(achievementsPanel, BorderLayout.CENTER);
         updateAchievementsView();
+        p.add(col2);
 
-        p.add(Box.createRigidArea(new Dimension(0, 6)));
-
-        // Кнопки сохранения и сброса
-        JPanel savePanel = new GridLayout(2, 2, 6, 5) != null ? new JPanel(new GridLayout(2, 2, 6, 5)) : new JPanel();
-        savePanel.setOpaque(false);
-        savePanel.setMaximumSize(new Dimension(360, 62));
+        // Колонка 3: Сохранения
+        JPanel col3 = createCardPanel("💾 УПРАВЛЕНИЕ ДАННЫМИ", new Color(52, 152, 219));
+        JPanel saveGrid = new JPanel(new GridLayout(2, 2, 6, 6));
+        saveGrid.setOpaque(false);
 
         saveBtn = new StyledButton("💾 Сохранить", new Color(46, 204, 113), e -> saveGame(true));
         resetBtn = new StyledButton("🔄 Сброс", new Color(192, 57, 43), e -> resetGame());
         exportSaveBtn = new StyledButton("📋 Экспорт (Base64)", new Color(52, 152, 219), e -> exportSaveCode());
         importSaveBtn = new StyledButton("📥 Импорт (Код)", new Color(155, 89, 182), e -> importSaveCode());
 
-        savePanel.add(saveBtn);
-        savePanel.add(resetBtn);
-        savePanel.add(exportSaveBtn);
-        savePanel.add(importSaveBtn);
-        p.add(savePanel);
+        saveGrid.add(saveBtn);
+        saveGrid.add(resetBtn);
+        saveGrid.add(exportSaveBtn);
+        saveGrid.add(importSaveBtn);
+        col3.add(saveGrid, BorderLayout.CENTER);
+        p.add(col3);
 
+        return p;
+    }
+
+    // === ВКЛАДКА 5: ЦЕНТР СОБЫТИЙ И ЖУРНАЛ ОПЕРАТОРА ===
+    private JPanel createLogTab() {
+        JPanel p = new JPanel(new BorderLayout(10, 0));
+        p.setOpaque(false);
+
+        // Левая панель: фильтры и действия
+        JPanel leftPanel = createCardPanel("🔍 ФИЛЬТРЫ И ДЕЙСТВИЯ", new Color(0, 210, 211));
+        leftPanel.setPreferredSize(new Dimension(310, 200));
+
+        JPanel filterControls = new JPanel();
+        filterControls.setLayout(new BoxLayout(filterControls, BoxLayout.Y_AXIS));
+        filterControls.setOpaque(false);
+
+        JPanel catGrid = new JPanel(new GridLayout(3, 2, 5, 5));
+        catGrid.setOpaque(false);
+
+        for (LogCategory cat : LogCategory.values()) {
+            StyledButton btn = new StyledButton(cat.icon + " " + cat.title, cat.color, e -> setLogFilter(cat));
+            btn.setPreferredSize(new Dimension(135, 24));
+            catGrid.add(btn);
+        }
+        filterControls.add(catGrid);
+        filterControls.add(Box.createRigidArea(new Dimension(0, 8)));
+
+        JPanel actionGrid = new JPanel(new GridLayout(1, 2, 5, 0));
+        actionGrid.setOpaque(false);
+        StyledButton clearBtn = new StyledButton("🧹 Очистить", new Color(231, 76, 60), e -> clearLog());
+        StyledButton copyBtn = new StyledButton("📋 Копировать", new Color(41, 128, 185), e -> copyLogToClipboard());
+        actionGrid.add(clearBtn);
+        actionGrid.add(copyBtn);
+        filterControls.add(actionGrid);
+
+        filterControls.add(Box.createRigidArea(new Dimension(0, 8)));
+        logSummaryStats = new JLabel("Всего записей: 0");
+        logSummaryStats.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
+        logSummaryStats.setForeground(new Color(148, 163, 184));
+        filterControls.add(logSummaryStats);
+
+        leftPanel.add(filterControls, BorderLayout.CENTER);
+        p.add(leftPanel, BorderLayout.WEST);
+
+        // Правая панель: лента событий
+        JPanel rightPanel = createCardPanel("📋 ЛЕНТА СОБЫТИЙ ОПЕРАТОРА", new Color(148, 163, 184));
+        logTextPane = new JTextPane();
+        logTextPane.setContentType("text/html");
+        logTextPane.setEditable(false);
+        logTextPane.setBackground(new Color(15, 18, 25));
+
+        JScrollPane logScroll = new JScrollPane(logTextPane);
+        logScroll.setBorder(BorderFactory.createLineBorder(new Color(38, 48, 66)));
+        logScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        rightPanel.add(logScroll, BorderLayout.CENTER);
+
+        p.add(rightPanel, BorderLayout.CENTER);
+
+        refreshLogDisplay();
         return p;
     }
 
@@ -1313,8 +1437,7 @@ public class WindTycoon extends JFrame {
             setBorderPainted(false);
             setFont(new Font(Font.DIALOG, Font.BOLD, 10));
             setForeground(Color.WHITE);
-            setMaximumSize(new Dimension(360, 28));
-            setPreferredSize(new Dimension(360, 28));
+            setPreferredSize(new Dimension(100, 26));
             setAlignmentX(Component.CENTER_ALIGNMENT);
             setCursor(new Cursor(Cursor.HAND_CURSOR));
             addActionListener(al);
@@ -1375,9 +1498,99 @@ public class WindTycoon extends JFrame {
         }
     }
 
+    private void setLogFilter(LogCategory cat) {
+        currentLogFilter = cat;
+        refreshLogDisplay();
+        SoundSystem.play("click");
+    }
+
+    private void copyLogToClipboard() {
+        StringBuilder sb = new StringBuilder();
+        for (LogEntry e : logEntries) {
+            sb.append("[").append(e.time).append("] [").append(e.category.title).append("] ").append(e.message).append("\n");
+        }
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString()), null);
+        SoundSystem.play("click");
+        if (tickerLabel != null) {
+            tickerLabel.setText("✅ Журнал скопирован в буфер обмена (" + logEntries.size() + " записей)");
+        }
+    }
+
+    private void clearLog() {
+        logEntries.clear();
+        refreshLogDisplay();
+        SoundSystem.play("click");
+    }
+
+    private void refreshLogDisplay() {
+        if (logTextPane == null) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append("<html><body style='background-color:#0F1219; color:#E2E8F0; font-family:sans-serif; font-size:11px; margin:4px;'>");
+
+        int financeCount = 0, buildCount = 0, weatherCount = 0, incidentCount = 0, scienceCount = 0;
+        for (LogEntry e : logEntries) {
+            switch (e.category) {
+                case FINANCE: financeCount++; break;
+                case BUILD: buildCount++; break;
+                case WEATHER: weatherCount++; break;
+                case INCIDENT: incidentCount++; break;
+                case SCIENCE: scienceCount++; break;
+                default: break;
+            }
+        }
+
+        List<LogEntry> filtered = new ArrayList<>();
+        for (LogEntry e : logEntries) {
+            if (currentLogFilter == LogCategory.ALL || e.category == currentLogFilter) {
+                filtered.add(e);
+            }
+        }
+
+        int start = Math.max(0, filtered.size() - 150);
+        for (int i = start; i < filtered.size(); i++) {
+            LogEntry e = filtered.get(i);
+            String hex = String.format("#%02x%02x%02x", e.category.color.getRed(), e.category.color.getGreen(), e.category.color.getBlue());
+            sb.append("<div style='margin-bottom:3px; line-height:1.25;'>")
+              .append("<span style='color:#64748B;'>[").append(e.time).append("]</span> ")
+              .append("<span style='color:").append(hex).append("; font-weight:bold;'>")
+              .append(e.category.icon).append(" ").append(e.category.title).append(":</span> ")
+              .append("<span>").append(escapeHtml(e.message)).append("</span>")
+              .append("</div>");
+        }
+
+        sb.append("</body></html>");
+        logTextPane.setText(sb.toString());
+        logTextPane.setCaretPosition(logTextPane.getDocument().getLength());
+
+        if (logSummaryStats != null) {
+            logSummaryStats.setText("<html>Всего: <b>" + logEntries.size() + "</b> (фильтр: " + currentLogFilter.title + ")<br>" +
+                    "💰: " + financeCount + " &nbsp;🔨: " + buildCount + " &nbsp;🌦️: " + weatherCount + "<br>" +
+                    "🚨: " + incidentCount + " &nbsp;🔬: " + scienceCount + "</html>");
+        }
+    }
+
+    private String escapeHtml(String text) {
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
     private void log(String msg) {
-        eventLog.append(msg + "\n");
-        eventLog.setCaretPosition(eventLog.getDocument().getLength());
+        log(LogCategory.detect(msg), msg);
+    }
+
+    private void log(LogCategory cat, String msg) {
+        String time = logTimeFmt.format(new Date());
+        LogEntry entry = new LogEntry(time, cat, msg);
+        logEntries.add(entry);
+        if (logEntries.size() > 500) {
+            logEntries.remove(0);
+        }
+
+        if (tickerLabel != null) {
+            tickerLabel.setText(cat.icon + " " + msg);
+            tickerLabel.setToolTipText("[" + time + "] " + msg);
+        }
+
+        refreshLogDisplay();
     }
 
     // ==========================================
@@ -2990,6 +3203,10 @@ public class WindTycoon extends JFrame {
         if (selectedPlot == null) {
             selectedPlotTitle.setText("Участок не выбран");
             selectedPlotSub.setText("Кликните по участку на поле");
+            if (selectedPlotDurabilityBar != null) {
+                selectedPlotDurabilityBar.setValue(0);
+                selectedPlotDurabilityBar.setString("0%");
+            }
             buildBasicBtn.setText("🔨 Малый ($1k)");
             buildAdvBtn.setText("⚡ Средний ($3.2k)");
             buildIndBtn.setText("🌟 Гигант ($9k)");
@@ -3014,6 +3231,10 @@ public class WindTycoon extends JFrame {
             if (!selectedPlot.hasTurbine()) {
                 selectedPlotTitle.setText("Участок " + coords + " (Свободен)");
                 selectedPlotSub.setText("Выберите ветряк для постройки:");
+                if (selectedPlotDurabilityBar != null) {
+                    selectedPlotDurabilityBar.setValue(0);
+                    selectedPlotDurabilityBar.setString("Свободный участок");
+                }
                 buildBasicBtn.setText("🔨 Малый ($1k)");
                 buildAdvBtn.setText("⚡ Средний ($3.2k)");
                 buildIndBtn.setText("🌟 Гигант ($9k)");
@@ -3037,6 +3258,18 @@ public class WindTycoon extends JFrame {
                 TurbineType cur = selectedPlot.turbine;
                 selectedPlotTitle.setText(cur.name + " " + coords);
                 selectedPlotSub.setText("⭐ Lv." + selectedPlot.level + "  |  Состояние: " + dfShort.format(selectedPlot.durability) + "%");
+                if (selectedPlotDurabilityBar != null) {
+                    int dur = (int)selectedPlot.durability;
+                    selectedPlotDurabilityBar.setValue(dur);
+                    selectedPlotDurabilityBar.setString("Прочность: " + dfShort.format(selectedPlot.durability) + "%");
+                    if (dur < 35) {
+                        selectedPlotDurabilityBar.setForeground(new Color(231, 76, 60));
+                    } else if (dur < 75) {
+                        selectedPlotDurabilityBar.setForeground(new Color(241, 196, 15));
+                    } else {
+                        selectedPlotDurabilityBar.setForeground(new Color(46, 204, 113));
+                    }
+                }
 
                 updateGridButtonForEvolution(buildBasicBtn, "🔨 Малый", TurbineType.BASIC, cur);
                 updateGridButtonForEvolution(buildAdvBtn, "⚡ Средний", TurbineType.ADVANCED, cur);

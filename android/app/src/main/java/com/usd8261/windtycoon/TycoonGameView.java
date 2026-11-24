@@ -18,7 +18,7 @@ import java.util.Locale;
 
 public class TycoonGameView extends View {
 
-    public enum Tab { BUILD, MARKET, SCIENCE, PRESTIGE }
+    public enum Tab { BUILD, MARKET, SCIENCE, PRESTIGE, LOG }
 
     private static class SnowFlake {
         float x, y, speed, size;
@@ -397,9 +397,9 @@ public class TycoonGameView extends View {
 
         // Tabs Header
         float tabH = 38;
-        float tabW = w / 4.0f;
+        float tabW = w / 5.0f;
         Tab[] tabs = Tab.values();
-        String[] tabNames = {"🏗️ Стройка", "📈 Биржа", "🔬 Штаб", "👑 Престиж"};
+        String[] tabNames = {"🏗️ Стройка", "📈 Биржа", "🔬 Штаб", "👑 Престиж", "📋 Журнал"};
 
         for (int i = 0; i < tabs.length; i++) {
             boolean active = (tabs[i] == currentTab);
@@ -416,7 +416,7 @@ public class TycoonGameView extends View {
             }
 
             pText.setColor(active ? 0xFF38BDF8 : 0xFF94A3B8);
-            pText.setTextSize(12);
+            pText.setTextSize(w < 420 ? 10 : 11);
             pText.setTextAlign(Paint.Align.CENTER);
             pText.setFakeBoldText(active);
             canvas.drawText(tabNames[i], tx + tabW / 2, panelY + tabH / 2 + 4, pText);
@@ -439,6 +439,9 @@ public class TycoonGameView extends View {
                 break;
             case PRESTIGE:
                 drawPrestigeTab(canvas, w, contentY, contentH);
+                break;
+            case LOG:
+                drawLogTab(canvas, w, contentY, contentH);
                 break;
         }
     }
@@ -680,6 +683,42 @@ public class TycoonGameView extends View {
                 0xFF7C3AED, 0xFFA78BFA);
     }
 
+    private void drawLogTab(Canvas canvas, int w, float y, float h) {
+        float pad = 10;
+        float btnW = (w - pad * 3) / 2.0f;
+        float btnH = 34;
+
+        drawActionButton(canvas, pad, y, btnW, btnH, "🧹 ОЧИСТИТЬ", "Журнал", 0xFF991B1B, 0xFFEF4444);
+        drawActionButton(canvas, pad * 2 + btnW, y, btnW, btnH, "📋 СКОПИРОВАТЬ", "Все события", 0xFF0369A1, 0xFF38BDF8);
+
+        float listY = y + btnH + 8;
+        float entryH = 24;
+        int maxEntries = (int) ((h - btnH - 12) / entryH);
+
+        for (int i = 0; i < Math.min(maxEntries, engine.eventLog.size()); i++) {
+            float ey = listY + i * entryH;
+            rectTemp.set(pad, ey, w - pad, ey + entryH - 3);
+            pFill.setColor(i % 2 == 0 ? 0xFF1E293B : 0xFF0F172A);
+            canvas.drawRoundRect(rectTemp, 5, 5, pFill);
+
+            String logMsg = engine.eventLog.get(i);
+            pText.setColor(0xFFF1F5F9);
+            pText.setTextSize(10);
+            pText.setTextAlign(Paint.Align.LEFT);
+            pText.setFakeBoldText(false);
+
+            String display = logMsg;
+            float maxW = w - pad * 2 - 14;
+            if (pText.measureText(display) > maxW) {
+                while (display.length() > 6 && pText.measureText(display + "...") > maxW) {
+                    display = display.substring(0, display.length() - 1);
+                }
+                display += "...";
+            }
+            canvas.drawText(display, pad + 8, ey + entryH * 0.65f, pText);
+        }
+    }
+
     private void drawActionButton(Canvas canvas, float x, float y, float w, float h, String title, String sub, int bg, int border) {
         rectTemp.set(x, y, x + w, y + h);
         pFill.setColor(bg);
@@ -790,7 +829,7 @@ public class TycoonGameView extends View {
         float panelY = h - tabAreaHeight;
         float tabH = 38;
         if (y >= panelY && y <= panelY + tabH) {
-            int tabIndex = (int) (x / (w / 4.0f));
+            int tabIndex = (int) (x / (w / 5.0f));
             if (tabIndex >= 0 && tabIndex < Tab.values().length) {
                 currentTab = Tab.values()[tabIndex];
                 sound.playSound("click");
@@ -830,6 +869,13 @@ public class TycoonGameView extends View {
         // 4. Tab Actions
         if (y > panelY + tabH && y < h - 24) {
             handleTabActionClick(x, y, panelY + tabH + 4, tabAreaHeight - tabH - 30, w);
+        }
+
+        // 5. Bottom Event Log Bar Tap
+        if (y >= h - 24) {
+            currentTab = Tab.LOG;
+            sound.playSound("click");
+            return true;
         }
 
         return true;
@@ -956,6 +1002,31 @@ public class TycoonGameView extends View {
                         if (ok) sound.playSound("upgrade");
                     }
                 }
+            }
+        } else if (currentTab == Tab.LOG) {
+            float btnW = (w - pad * 3) / 2.0f;
+            float btnH = 34;
+
+            // Clear Log
+            if (x >= pad && x <= pad + btnW && y >= contentY && y <= contentY + btnH) {
+                engine.eventLog.clear();
+                sound.playSound("click");
+                return;
+            }
+
+            // Copy Log to Clipboard
+            if (x >= pad * 2 + btnW && x <= w - pad && y >= contentY && y <= contentY + btnH) {
+                ClipboardManager cm = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    StringBuilder sb = new StringBuilder();
+                    for (String s : engine.eventLog) {
+                        sb.append(s).append("\n");
+                    }
+                    ClipData clip = ClipData.newPlainText("WindTycoonLog", sb.toString());
+                    cm.setPrimaryClip(clip);
+                    sound.playSound("coin");
+                }
+                return;
             }
         }
     }
