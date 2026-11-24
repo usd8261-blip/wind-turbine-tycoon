@@ -5,11 +5,16 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 public class GameEngine {
+    public static final int GRID_ROWS = 4;
+    public static final int GRID_COLS = 3;
+
     public static class FloatingText {
         public float x, y;
         public String text;
@@ -31,7 +36,8 @@ public class GameEngine {
         }
     }
 
-    public final TurbinePlot[][] plots = new TurbinePlot[3][3];
+    public final Map<Biome, TurbinePlot[][]> biomePlots = new EnumMap<>(Biome.class);
+    public TurbinePlot[][] plots;
     public double balance = 1200.0;
     public float windSpeed = 8.5f;
     public String weather = "Бриз";
@@ -86,15 +92,20 @@ public class GameEngine {
         // Valley is unlocked by default
         unlockedBiomes[Biome.VALLEY.ordinal()] = true;
 
-        // Initialize 3x3 plots
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
-                plots[r][c] = new TurbinePlot(r, c);
+        // Initialize plots for each biome (4 rows x 3 cols = 12 slots per location)
+        for (Biome b : Biome.values()) {
+            TurbinePlot[][] bPlots = new TurbinePlot[GRID_ROWS][GRID_COLS];
+            for (int r = 0; r < GRID_ROWS; r++) {
+                for (int c = 0; c < GRID_COLS; c++) {
+                    bPlots[r][c] = new TurbinePlot(r, c);
+                }
             }
+            biomePlots.put(b, bPlots);
         }
-        // Free starting small turbine
-        plots[0][0].type = TurbineType.SMALL;
-        plots[0][0].level = 1;
+        // Free starting small turbine in Valley
+        biomePlots.get(Biome.VALLEY)[0][0].type = TurbineType.SMALL;
+        biomePlots.get(Biome.VALLEY)[0][0].level = 1;
+        plots = biomePlots.get(currentBiome);
 
         currentContract = Contract.generateRandom();
         addLog("Добро пожаловать в Wind Turbine Tycoon!");
@@ -134,15 +145,21 @@ public class GameEngine {
     public float getTotalOutputKW() {
         float aeroMult = ResearchItem.BLADE_AERO.unlocked ? 1.2f : 1.0f;
         float total = 0.0f;
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
-                TurbinePlot p = plots[r][c];
-                float kw = p.getOutputKW(windSpeed, aeroMult);
-                // Summer Solar Hybrid buff x1.50
-                if (currentSeason == Season.SUMMER && p.type == TurbineType.HYBRID) {
-                    kw *= 1.50f;
+        for (Map.Entry<Biome, TurbinePlot[][]> entry : biomePlots.entrySet()) {
+            Biome b = entry.getKey();
+            TurbinePlot[][] bPlots = entry.getValue();
+            for (int r = 0; r < GRID_ROWS; r++) {
+                for (int c = 0; c < GRID_COLS; c++) {
+                    TurbinePlot p = bPlots[r][c];
+                    float kw = p.getOutputKW(windSpeed * b.windModifier, aeroMult);
+                    if (currentSeason == Season.SUMMER && p.type == TurbineType.HYBRID) {
+                        kw *= 1.50f;
+                    }
+                    if (p.type == TurbineType.OFFSHORE && b == Biome.OCEAN) {
+                        kw *= 1.50f;
+                    }
+                    total += kw;
                 }
-                total += kw;
             }
         }
         if (techOrbitalLink) {
@@ -152,37 +169,40 @@ public class GameEngine {
     }
 
     public double getIncomePerSecond() {
-        float kw = getTotalOutputKW();
         float price = marketPrice * (ResearchItem.GENERATOR.unlocked ? 1.25f : 1.0f);
-        if (policyGreenTariff) {
-            price *= 1.25f;
-        }
+        if (policyGreenTariff) price *= 1.25f;
+        if (currentSeason == Season.WINTER) price *= 1.35f;
 
-        // Winter Heating Demand Bonus x1.35
-        if (currentSeason == Season.WINTER) {
-            price *= 1.35f;
-        }
+        float aeroMult = ResearchItem.BLADE_AERO.unlocked ? 1.2f : 1.0f;
+        double totalIncome = 0.0;
 
-        double income = (kw * price * 0.1) * prestigeMultiplier * currentBiome.incomeModifier;
+        for (Map.Entry<Biome, TurbinePlot[][]> entry : biomePlots.entrySet()) {
+            Biome b = entry.getKey();
+            TurbinePlot[][] bPlots = entry.getValue();
+            for (int r = 0; r < GRID_ROWS; r++) {
+                for (int c = 0; c < GRID_COLS; c++) {
+                    TurbinePlot p = bPlots[r][c];
+                    if (!p.isEmpty() && !p.isBroken && !p.isBurning) {
+                        float kw = p.getOutputKW(windSpeed * b.windModifier, aeroMult);
+                        if (currentSeason == Season.SUMMER && p.type == TurbineType.HYBRID) kw *= 1.50f;
+                        if (p.type == TurbineType.OFFSHORE && b == Biome.OCEAN) kw *= 1.50f;
 
-        // Offshore in Ocean biome bonus +50%
-        if (currentBiome == Biome.OCEAN) {
-            int offshoreCount = 0;
-            for (int r = 0; r < 3; r++) {
-                for (int c = 0; c < 3; c++) {
-                    if (plots[r][c].type == TurbineType.OFFSHORE && !plots[r][c].isBroken && !plots[r][c].isBurning) {
-                        offshoreCount++;
+                        double inc = (kw * price * 0.1) * prestigeMultiplier * b.incomeModifier;
+                        totalIncome += inc;
                     }
                 }
             }
-            if (offshoreCount > 0) {
-                income *= (1.0 + offshoreCount * 0.15);
-            }
+        }
+
+        if (techOrbitalLink) {
+            totalIncome += (400.0f * price * 0.1) * prestigeMultiplier * currentBiome.incomeModifier;
         }
 
         if (hasTechSupport) {
-            income = Math.max(0, income - 1.0);
+            totalIncome = Math.max(0, totalIncome - 1.0);
         }
+        return totalIncome;
+    }
         return income;
     }
 
@@ -252,20 +272,24 @@ public class GameEngine {
             wearMultiplier *= 0.70f; // ESG durability policy
         }
 
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
-                TurbinePlot p = plots[r][c];
-                boolean wasBroken = p.isBroken;
-                p.update(windSpeed, autoDrones, hasTechSupport, wearMultiplier);
+        for (Map.Entry<Biome, TurbinePlot[][]> entry : biomePlots.entrySet()) {
+            Biome b = entry.getKey();
+            TurbinePlot[][] bPlots = entry.getValue();
+            for (int r = 0; r < GRID_ROWS; r++) {
+                for (int c = 0; c < GRID_COLS; c++) {
+                    TurbinePlot p = bPlots[r][c];
+                    boolean wasBroken = p.isBroken;
+                    p.update(windSpeed * b.windModifier, autoDrones, hasTechSupport, wearMultiplier);
 
-                // Chief Mechanic breakdown rescue
-                if (!wasBroken && p.isBroken && ResearchItem.CHIEF_MECHANIC.unlocked) {
-                    if (Math.random() < 0.35) {
-                        p.condition = 45.0f;
-                        p.isBroken = false;
-                        p.isBurning = false;
-                        addLog("🔧 Главный механик спас ветряк [" + (r + 1) + "," + (c + 1) + "] от аварии!");
-                        sound.playSound("repair");
+                    // Chief Mechanic breakdown rescue
+                    if (!wasBroken && p.isBroken && ResearchItem.CHIEF_MECHANIC.unlocked) {
+                        if (Math.random() < 0.35) {
+                            p.condition = 45.0f;
+                            p.isBroken = false;
+                            p.isBurning = false;
+                            addLog("🔧 Главный механик спас ветряк [" + (r + 1) + "," + (c + 1) + "] (" + b.title + ")!");
+                            sound.playSound("repair");
+                        }
                     }
                 }
             }
@@ -275,11 +299,13 @@ public class GameEngine {
         double incomeThisTick = getIncomePerSecond() * dt;
         balance += incomeThisTick;
 
-        // Science generation (0.1 SP/s per active turbine)
+        // Science generation (0.08 SP/s per active turbine across all biomes)
         int activeCount = 0;
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
-                if (!plots[r][c].isEmpty() && !plots[r][c].isBroken && !plots[r][c].isBurning) activeCount++;
+        for (TurbinePlot[][] bPlots : biomePlots.values()) {
+            for (int r = 0; r < GRID_ROWS; r++) {
+                for (int c = 0; c < GRID_COLS; c++) {
+                    if (!bPlots[r][c].isEmpty() && !bPlots[r][c].isBroken && !bPlots[r][c].isBurning) activeCount++;
+                }
             }
         }
         float spGain = activeCount * 0.08f * dt;
@@ -430,8 +456,8 @@ public class GameEngine {
     public int repairAllTurbines() {
         double rawCost = 0.0;
         int count = 0;
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
+        for (int r = 0; r < GRID_ROWS; r++) {
+            for (int c = 0; c < GRID_COLS; c++) {
                 TurbinePlot p = plots[r][c];
                 if (!p.isEmpty() && (p.condition < 100.0f || p.isBroken || p.isBurning)) {
                     rawCost += p.getRepairCost();
@@ -444,8 +470,8 @@ public class GameEngine {
         double finalCost = rawCost * 0.85; // 15% wholesale discount
         if (balance >= finalCost) {
             balance -= finalCost;
-            for (int r = 0; r < 3; r++) {
-                for (int c = 0; c < 3; c++) {
+            for (int r = 0; r < GRID_ROWS; r++) {
+                for (int c = 0; c < GRID_COLS; c++) {
                     plots[r][c].repair();
                 }
             }
@@ -459,8 +485,8 @@ public class GameEngine {
     // Extinguish all fires ($500 per fire)
     public int extinguishAllFires() {
         int count = 0;
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
+        for (int r = 0; r < GRID_ROWS; r++) {
+            for (int c = 0; c < GRID_COLS; c++) {
                 if (plots[r][c].isBurning) count++;
             }
         }
@@ -469,8 +495,8 @@ public class GameEngine {
         double cost = count * 500.0;
         if (balance >= cost) {
             balance -= cost;
-            for (int r = 0; r < 3; r++) {
-                for (int c = 0; c < 3; c++) {
+            for (int r = 0; r < GRID_ROWS; r++) {
+                for (int c = 0; c < GRID_COLS; c++) {
                     plots[r][c].extinguish();
                 }
             }
@@ -485,19 +511,36 @@ public class GameEngine {
         int idx = b.ordinal();
         if (unlockedBiomes[idx]) {
             currentBiome = b;
-            addLog("📍 Переход в биом: " + b.title);
+            plots = biomePlots.get(b);
+            int count = countTurbinesInBiome(b);
+            addLog("📍 Локация: " + b.title + " (" + count + "/" + (GRID_ROWS * GRID_COLS) + " вышек). Станции в других биомах приносят прибыль!");
             sound.playSound("upgrade");
+            saveState();
             return true;
         }
         if (balance >= b.unlockCost) {
             balance -= b.unlockCost;
             unlockedBiomes[idx] = true;
             currentBiome = b;
-            addLog("🎉 Открыт новый биом: " + b.title + "! " + b.description);
+            plots = biomePlots.get(b);
+            addLog("🎉 Открыта новая локация: " + b.title + "! Старые фермы продолжают вырабатывать доход!");
             sound.playSound("evolve");
+            saveState();
             return true;
         }
         return false;
+    }
+
+    public int countTurbinesInBiome(Biome b) {
+        TurbinePlot[][] bp = biomePlots.get(b);
+        if (bp == null) return 0;
+        int count = 0;
+        for (int r = 0; r < GRID_ROWS; r++) {
+            for (int c = 0; c < GRID_COLS; c++) {
+                if (!bp[r][c].isEmpty()) count++;
+            }
+        }
+        return count;
     }
 
     public boolean unlockResearch(ResearchItem item) {
@@ -524,16 +567,19 @@ public class GameEngine {
         prestigeCount++;
         prestigeMultiplier = 1.0 + (prestigeCount * 0.5);
 
-        // Reset farm
+        // Reset farm across all biomes
         balance = 1200.0;
         sciencePoints = 0.0f;
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
-                plots[r][c] = new TurbinePlot(r, c);
+        for (TurbinePlot[][] bp : biomePlots.values()) {
+            for (int r = 0; r < GRID_ROWS; r++) {
+                for (int c = 0; c < GRID_COLS; c++) {
+                    bp[r][c] = new TurbinePlot(r, c);
+                }
             }
         }
-        plots[0][0].type = TurbineType.SMALL;
-        plots[0][0].level = 1;
+        biomePlots.get(Biome.VALLEY)[0][0].type = TurbineType.SMALL;
+        biomePlots.get(Biome.VALLEY)[0][0].level = 1;
+        plots = biomePlots.get(currentBiome);
 
         addLog("👑 ПРЕСТИЖ R" + prestigeCount + "! Множитель x" + String.format(Locale.US, "%.1f", prestigeMultiplier));
         sound.playSound("rebirth");
@@ -555,8 +601,8 @@ public class GameEngine {
             sb.append(ri.unlocked ? "1" : "0").append(",");
         }
         sb.append(";");
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
+        for (int r = 0; r < GRID_ROWS; r++) {
+            for (int c = 0; c < GRID_COLS; c++) {
                 TurbinePlot p = plots[r][c];
                 sb.append(p.type != null ? p.type.name() : "NONE").append(":")
                   .append(p.level).append(":")
@@ -592,16 +638,18 @@ public class GameEngine {
                 if (parts.length >= 7) {
                     String[] plotData = parts[6].split("\\|");
                     int idx = 0;
-                    for (int r = 0; r < 3; r++) {
-                        for (int c = 0; c < 3; c++) {
+                    for (int r = 0; r < GRID_ROWS; r++) {
+                        for (int c = 0; c < GRID_COLS; c++) {
                             if (idx < plotData.length && !plotData[idx].isEmpty()) {
                                 String[] f = plotData[idx].split(":");
                                 if (!"NONE".equals(f[0])) {
-                                    plots[r][c].type = TurbineType.valueOf(f[0]);
-                                    plots[r][c].level = Integer.parseInt(f[1]);
-                                    plots[r][c].condition = Float.parseFloat(f[2]);
-                                    plots[r][c].isBroken = plots[r][c].condition <= 0;
-                                    plots[r][c].isBurning = false;
+                                    try {
+                                        plots[r][c].type = TurbineType.valueOf(f[0]);
+                                        plots[r][c].level = Integer.parseInt(f[1]);
+                                        plots[r][c].condition = Float.parseFloat(f[2]);
+                                        plots[r][c].isBroken = plots[r][c].condition <= 0;
+                                        plots[r][c].isBurning = false;
+                                    } catch (Exception ignored) {}
                                 } else {
                                     plots[r][c].type = null;
                                 }
@@ -695,14 +743,18 @@ public class GameEngine {
                 ed.putBoolean("res_" + item.name(), item.unlocked);
             }
 
-            for (int r = 0; r < 3; r++) {
-                for (int c = 0; c < 3; c++) {
-                    TurbinePlot p = plots[r][c];
-                    String prefix = "p_" + r + "_" + c + "_";
-                    ed.putString(prefix + "type", p.type != null ? p.type.name() : "");
-                    ed.putInt(prefix + "level", p.level);
-                    ed.putFloat(prefix + "condition", p.condition);
-                    ed.putBoolean(prefix + "burning", p.isBurning);
+            for (Map.Entry<Biome, TurbinePlot[][]> entry : biomePlots.entrySet()) {
+                Biome b = entry.getKey();
+                TurbinePlot[][] bPlots = entry.getValue();
+                for (int r = 0; r < GRID_ROWS; r++) {
+                    for (int c = 0; c < GRID_COLS; c++) {
+                        TurbinePlot p = bPlots[r][c];
+                        String prefix = "bp_" + b.name() + "_" + r + "_" + c + "_";
+                        ed.putString(prefix + "type", p.type != null ? p.type.name() : "");
+                        ed.putInt(prefix + "level", p.level);
+                        ed.putFloat(prefix + "condition", p.condition);
+                        ed.putBoolean(prefix + "burning", p.isBurning);
+                    }
                 }
             }
             ed.apply();
@@ -748,22 +800,37 @@ public class GameEngine {
             if (ResearchItem.HYDROGEN_PLANT.unlocked) techHydrogenUnlocked = true;
             if (ResearchItem.ORBITAL_BEAM.unlocked) techOrbitalLink = true;
 
-            for (int r = 0; r < 3; r++) {
-                for (int c = 0; c < 3; c++) {
-                    String prefix = "p_" + r + "_" + c + "_";
-                    String typeName = prefs.getString(prefix + "type", "");
-                    if (!typeName.isEmpty()) {
-                        try {
-                            plots[r][c].type = TurbineType.valueOf(typeName);
-                            plots[r][c].level = prefs.getInt(prefix + "level", 1);
-                            plots[r][c].condition = prefs.getFloat(prefix + "condition", 100.0f);
-                            plots[r][c].isBurning = prefs.getBoolean(prefix + "burning", false);
-                            plots[r][c].isBroken = plots[r][c].condition <= 0.0f;
-                        } catch (Exception ignored) {}
-                    } else {
-                        plots[r][c].type = null;
+            for (Map.Entry<Biome, TurbinePlot[][]> entry : biomePlots.entrySet()) {
+                Biome b = entry.getKey();
+                TurbinePlot[][] bPlots = entry.getValue();
+                for (int r = 0; r < GRID_ROWS; r++) {
+                    for (int c = 0; c < GRID_COLS; c++) {
+                        String prefix = "bp_" + b.name() + "_" + r + "_" + c + "_";
+                        String typeName = prefs.getString(prefix + "type", "");
+                        if (typeName.isEmpty() && b == Biome.VALLEY) {
+                            typeName = prefs.getString("p_" + r + "_" + c + "_type", "");
+                            if (!typeName.isEmpty()) {
+                                prefix = "p_" + r + "_" + c + "_";
+                            }
+                        }
+                        if (!typeName.isEmpty()) {
+                            try {
+                                bPlots[r][c].type = TurbineType.valueOf(typeName);
+                                bPlots[r][c].level = prefs.getInt(prefix + "level", 1);
+                                bPlots[r][c].condition = prefs.getFloat(prefix + "condition", 100.0f);
+                                bPlots[r][c].isBurning = prefs.getBoolean(prefix + "burning", false);
+                                bPlots[r][c].isBroken = bPlots[r][c].condition <= 0.0f;
+                            } catch (Exception ignored) {}
+                        } else {
+                            bPlots[r][c].type = null;
+                        }
                     }
                 }
+            }
+            plots = biomePlots.get(currentBiome);
+            if (plots == null) {
+                currentBiome = Biome.VALLEY;
+                plots = biomePlots.get(Biome.VALLEY);
             }
         } catch (Exception ignored) {}
     }

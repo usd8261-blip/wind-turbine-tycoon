@@ -229,11 +229,11 @@ public class TycoonGameView extends View {
 
     private void drawTurbineGrid(Canvas canvas, int w, float topY, float gridH) {
         float pad = 8;
-        float cellW = (w - pad * 4) / 3.0f;
-        float cellH = (gridH - pad * 4) / 3.0f;
+        float cellW = (w - pad * (GameEngine.GRID_COLS + 1)) / (float) GameEngine.GRID_COLS;
+        float cellH = (gridH - pad * (GameEngine.GRID_ROWS + 1)) / (float) GameEngine.GRID_ROWS;
 
-        for (int r = 0; r < 3; r++) {
-            for (int c = 0; c < 3; c++) {
+        for (int r = 0; r < GameEngine.GRID_ROWS; r++) {
+            for (int c = 0; c < GameEngine.GRID_COLS; c++) {
                 float x = pad + c * (cellW + pad);
                 float y = topY + pad + r * (cellH + pad);
                 boolean isSelected = (r == selectedRow && c == selectedCol);
@@ -459,10 +459,11 @@ public class TycoonGameView extends View {
             float bx = pad + i * (bioW + pad);
             boolean isCur = (engine.currentBiome == b);
             boolean isUnlocked = engine.unlockedBiomes[i];
+            int count = engine.countTurbinesInBiome(b);
 
             String bTitle = b.title.split(" ")[0];
-            String bSub = isCur ? "АКТИВЕН" : (isUnlocked ? "ВЫБРАТЬ" : "$" + (int) (b.unlockCost / 1000) + "k");
-            drawActionButton(canvas, bx, y, bioW, bioH, bTitle + " (" + bSub + ")", "",
+            String bSub = isCur ? count + "/12 [АКТИВ]" : (isUnlocked ? count + "/12" : "$" + (int) (b.unlockCost / 1000) + "k");
+            drawActionButton(canvas, bx, y, bioW, bioH, bTitle + " " + bSub, "",
                     isCur ? 0xFF0284C7 : (isUnlocked ? 0xFF1E293B : 0xFF334155),
                     isCur ? 0xFF38BDF8 : 0xFF64748B);
         }
@@ -874,11 +875,11 @@ public class TycoonGameView extends View {
         float gridTop = 30 + rowH + 5 + 26 + 10;
         float gridHeight = h - gridTop - tabAreaHeight;
         if (y >= gridTop && y <= gridTop + gridHeight) {
-            float cellW = (w - pad * 4) / 3.0f;
-            float cellH = (gridHeight - pad * 4) / 3.0f;
+            float cellW = (w - pad * (GameEngine.GRID_COLS + 1)) / (float) GameEngine.GRID_COLS;
+            float cellH = (gridHeight - pad * (GameEngine.GRID_ROWS + 1)) / (float) GameEngine.GRID_ROWS;
 
-            for (int r = 0; r < 3; r++) {
-                for (int c = 0; c < 3; c++) {
+            for (int r = 0; r < GameEngine.GRID_ROWS; r++) {
+                for (int c = 0; c < GameEngine.GRID_COLS; c++) {
                     float cx = pad + c * (cellW + pad);
                     float cy = gridTop + pad + r * (cellH + pad);
 
@@ -927,6 +928,8 @@ public class TycoonGameView extends View {
                     float bx = pad + i * (bioW + pad);
                     if (x >= bx && x <= bx + bioW) {
                         engine.selectBiome(Biome.values()[i]);
+                        selectedRow = 0;
+                        selectedCol = 0;
                         return;
                     }
                 }

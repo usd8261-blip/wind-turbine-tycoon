@@ -19,6 +19,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.Map;
+import java.util.EnumMap;
 import java.util.function.Consumer;
 
 /**
@@ -834,10 +836,11 @@ public class WindTycoon extends JFrame {
     private final List<Double> priceHistory = new ArrayList<>();
     private final List<HoverCar> hoverCars = new ArrayList<>();
 
-    // Сетка участков (4x3 = 12 платформ)
-    private static final int COLS = 4;
+    // Сетка участков (5x3 = 15 платформ на локацию)
+    private static final int COLS = 5;
     private static final int ROWS = 3;
-    private final Plot[][] plots = new Plot[COLS][ROWS];
+    private final Map<Biome, Plot[][]> biomePlots = new EnumMap<>(Biome.class);
+    private Plot[][] plots;
     private Plot selectedPlot = null;
 
     // Анимационные списки
@@ -1035,11 +1038,16 @@ public class WindTycoon extends JFrame {
             }
         });
 
-        for (int c = 0; c < COLS; c++) {
-            for (int r = 0; r < ROWS; r++) {
-                plots[c][r] = new Plot(c, r);
+        for (Biome b : Biome.values()) {
+            Plot[][] bGrid = new Plot[COLS][ROWS];
+            for (int c = 0; c < COLS; c++) {
+                for (int r = 0; r < ROWS; r++) {
+                    bGrid[c][r] = new Plot(c, r);
+                }
             }
+            biomePlots.put(b, bGrid);
         }
+        plots = biomePlots.get(currentBiome);
 
         for (int i = 0; i < 75; i++) {
             stars.add(new Point(random.nextInt(1280), random.nextInt(400)));
@@ -2144,11 +2152,15 @@ public class WindTycoon extends JFrame {
         }
         pw.println("achievements=" + sbAch.toString());
 
-        for (int c = 0; c < COLS; c++) {
-            for (int r = 0; r < ROWS; r++) {
-                Plot p = plots[c][r];
-                if (p.hasTurbine()) {
-                    pw.println("plot=" + c + "," + r + "," + p.turbine.name() + "," + p.level + "," + p.durability + "," + p.isBurning);
+        for (Map.Entry<Biome, Plot[][]> entry : biomePlots.entrySet()) {
+            Biome b = entry.getKey();
+            Plot[][] bPlots = entry.getValue();
+            for (int c = 0; c < COLS; c++) {
+                for (int r = 0; r < ROWS; r++) {
+                    Plot p = bPlots[c][r];
+                    if (p.hasTurbine()) {
+                        pw.println("biomePlot=" + b.name() + "," + c + "," + r + "," + p.turbine.name() + "," + p.level + "," + p.durability + "," + p.isBurning);
+                    }
                 }
             }
         }
@@ -2241,25 +2253,54 @@ public class WindTycoon extends JFrame {
                 for (String a : achs) {
                     if (!a.isEmpty()) achievements.add(a);
                 }
+            } else if (line.startsWith("biomePlot=")) {
+                String[] parts = line.substring(10).split(",");
+                if (parts.length >= 6) {
+                    try {
+                        Biome b = Biome.valueOf(parts[0]);
+                        int c = Integer.parseInt(parts[1]);
+                        int r = Integer.parseInt(parts[2]);
+                        TurbineType t = TurbineType.valueOf(parts[3]);
+                        int lvl = Integer.parseInt(parts[4]);
+                        double dur = Double.parseDouble(parts[5]);
+                        Plot[][] bPlots = biomePlots.get(b);
+                        if (bPlots != null && c >= 0 && c < COLS && r >= 0 && r < ROWS) {
+                            bPlots[c][r].turbine = t;
+                            bPlots[c][r].level = lvl;
+                            bPlots[c][r].durability = dur;
+                            if (parts.length >= 7) {
+                                bPlots[c][r].isBurning = Boolean.parseBoolean(parts[6]);
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                }
             } else if (line.startsWith("plot=")) {
                 String[] parts = line.substring(5).split(",");
                 if (parts.length >= 5) {
-                    int c = Integer.parseInt(parts[0]);
-                    int r = Integer.parseInt(parts[1]);
-                    TurbineType t = TurbineType.valueOf(parts[2]);
-                    int lvl = Integer.parseInt(parts[3]);
-                    double dur = Double.parseDouble(parts[4]);
+                    try {
+                        int c = Integer.parseInt(parts[0]);
+                        int r = Integer.parseInt(parts[1]);
+                        TurbineType t = TurbineType.valueOf(parts[2]);
+                        int lvl = Integer.parseInt(parts[3]);
+                        double dur = Double.parseDouble(parts[4]);
 
-                    if (c >= 0 && c < COLS && r >= 0 && r < ROWS) {
-                        plots[c][r].turbine = t;
-                        plots[c][r].level = lvl;
-                        plots[c][r].durability = dur;
-                        if (parts.length >= 6) {
-                            plots[c][r].isBurning = Boolean.parseBoolean(parts[5]);
+                        Plot[][] bPlots = biomePlots.get(Biome.VALLEY);
+                        if (bPlots != null && c >= 0 && c < COLS && r >= 0 && r < ROWS) {
+                            bPlots[c][r].turbine = t;
+                            bPlots[c][r].level = lvl;
+                            bPlots[c][r].durability = dur;
+                            if (parts.length >= 6) {
+                                bPlots[c][r].isBurning = Boolean.parseBoolean(parts[5]);
+                            }
                         }
-                    }
+                    } catch (Exception ignored) {}
                 }
             }
+        }
+        plots = biomePlots.get(currentBiome);
+        if (plots == null) {
+            currentBiome = Biome.VALLEY;
+            plots = biomePlots.get(Biome.VALLEY);
         }
     }
 
@@ -2299,12 +2340,14 @@ public class WindTycoon extends JFrame {
 
         double baseIncome = 0.0;
         double basePower = 0.0;
-        for (int c = 0; c < COLS; c++) {
-            for (int r = 0; r < ROWS; r++) {
-                Plot p = plots[c][r];
-                if (p.hasTurbine() && p.durability > 10.0 && !p.isBurning) {
-                    baseIncome += p.turbine.baseIncomePerSec * p.level;
-                    basePower += p.turbine.maxPowerKw * p.level;
+        for (Plot[][] bp : biomePlots.values()) {
+            for (int c = 0; c < COLS; c++) {
+                for (int r = 0; r < ROWS; r++) {
+                    Plot p = bp[c][r];
+                    if (p.hasTurbine() && p.durability > 10.0 && !p.isBurning) {
+                        baseIncome += p.turbine.baseIncomePerSec * p.level;
+                        basePower += p.turbine.maxPowerKw * p.level;
+                    }
                 }
             }
         }
@@ -2407,11 +2450,30 @@ public class WindTycoon extends JFrame {
         }
 
         currentBiome = b;
+        plots = biomePlots.get(b);
+        selectedPlot = null;
+        for (RepairDrone drone : drones) {
+            drone.targetPlot = null;
+        }
         SoundSystem.play("click");
-        log("🗺️ Вы переместились на локацию: " + b.title + " (" + b.desc + ")");
+        int countHere = countTurbinesInBiome(b);
+        log("🗺️ Вы переместились на локацию: " + b.title + " (" + countHere + "/" + (COLS * ROWS) + " турбин). Все ваши станции работают и приносят прибыль!");
+        floatingTexts.add(new FloatingText(canvas.getWidth() / 2, canvas.getHeight() / 3, "🗺️ " + b.title, new Color(52, 152, 219)));
         updateControlButtons();
         updateUI();
         canvas.repaint();
+    }
+
+    private int countTurbinesInBiome(Biome b) {
+        Plot[][] bp = biomePlots.get(b);
+        if (bp == null) return 0;
+        int count = 0;
+        for (int c = 0; c < COLS; c++) {
+            for (int r = 0; r < ROWS; r++) {
+                if (bp[c][r].hasTurbine()) count++;
+            }
+        }
+        return count;
     }
 
     private void repairAllTurbines() {
@@ -2590,11 +2652,14 @@ public class WindTycoon extends JFrame {
             policyBattery = false;
             currentSkin = TurbineSkin.CLASSIC;
 
-            for (int c = 0; c < COLS; c++) {
-                for (int r = 0; r < ROWS; r++) {
-                    plots[c][r].turbine = null;
-                    plots[c][r].level = 1;
-                    plots[c][r].durability = 100.0;
+            for (Plot[][] bp : biomePlots.values()) {
+                for (int c = 0; c < COLS; c++) {
+                    for (int r = 0; r < ROWS; r++) {
+                        bp[c][r].turbine = null;
+                        bp[c][r].level = 1;
+                        bp[c][r].durability = 100.0;
+                        bp[c][r].isBurning = false;
+                    }
                 }
             }
             selectedPlot = null;
@@ -2915,79 +2980,91 @@ public class WindTycoon extends JFrame {
 
         boolean isDaytime = (timeOfDay < 0.45 || timeOfDay > 0.88);
 
-        for (int c = 0; c < COLS; c++) {
-            for (int r = 0; r < ROWS; r++) {
-                Plot p = plots[c][r];
-                if (p.hasTurbine() && p.durability > 0) {
-                    activeTurbines++;
-                    totalTurbineLevels += p.level;
+        for (Map.Entry<Biome, Plot[][]> entry : biomePlots.entrySet()) {
+            Biome b = entry.getKey();
+            Plot[][] bPlots = entry.getValue();
+            boolean isCurrent = (b == currentBiome);
+            double bIncomeMult = b.incomeModifier;
+            double bWindMult = b.windModifier;
 
-                    double localWindEff = windEfficiency;
-                    if (p.turbine == TurbineType.OFFSHORE && localWindEff < 0.65) {
-                        localWindEff = 0.65;
-                    }
+            for (int c = 0; c < COLS; c++) {
+                for (int r = 0; r < ROWS; r++) {
+                    Plot p = bPlots[c][r];
+                    if (p.hasTurbine() && p.durability > 0) {
+                        activeTurbines++;
+                        totalTurbineLevels += p.level;
 
-                    double healthFactor = (p.durability < 35.0) ? (p.durability / 35.0) : 1.0;
-                    double levelBonus = 1.0 + (p.level - 1) * 0.35;
-
-                    double kw = p.turbine.maxPowerKw * localWindEff * healthFactor * levelBonus * comboMultiplier * aeroMultiplier;
-                    double turbineIncome = p.turbine.baseIncomePerSec * localWindEff * healthFactor * levelBonus * comboMultiplier * rebirthMultiplier * summitMultiplier * winterTariff * biomeIncomeMult * greenTariffMult;
-
-                    if (p.turbine == TurbineType.SOLAR_HYBRID && isDaytime) {
-                        turbineIncome += (140.0 * levelBonus * rebirthMultiplier * summerSolar);
-                        kw += (800.0 * levelBonus * summerSolar);
-                    }
-
-                    if (p.turbine == TurbineType.OFFSHORE && currentBiome == Biome.OCEAN) {
-                        kw *= 1.50;
-                        turbineIncome *= 1.50;
-                    }
-
-                    if (turbineIncome < 1.0) turbineIncome = 1.0;
-
-                    currentTotalKw += kw;
-                    currentTotalEarnings += turbineIncome;
-
-                    double stormWear = (windSpeed > 15.0) ? 1.8 : 1.0;
-                    p.durability -= (p.turbine.wearRate / p.level) * stormWear * wearMultiplier;
-
-                    // Логика горения
-                    if (p.isBurning) {
-                        p.durability = Math.max(0.0, p.durability - 2.5);
-                        if (p.durability <= 0.0) {
-                            p.isBurning = false;
+                        double localWindEff = Math.min(1.0, windEfficiency * bWindMult);
+                        if (p.turbine == TurbineType.OFFSHORE && localWindEff < 0.65) {
+                            localWindEff = 0.65;
                         }
-                    } else if (!tornadoActive && p.hasTurbine() && p.durability > 15.0) {
-                        boolean highStress = (windSpeed > 17.0 && p.durability < 65.0);
-                        double fireChance = highStress ? 0.025 : 0.0007;
-                        if (random.nextDouble() < fireChance) {
-                            p.isBurning = true;
-                            SoundSystem.play("siren");
-                            log("🔥 АВАРИЯ! Перегрев и возгорание на слоте [" + (c + 1) + "," + (r + 1) + "]! Потушите кликом!");
-                            floatingTexts.add(new FloatingText(canvas.getWidth() / 2, 70, "🔥 ПОЖАР НА ТУРБИНЕ!", new Color(231, 76, 60)));
-                        }
-                    }
 
-                    if (p.durability <= 0.0) {
-                        if (hiredChiefMechanic && random.nextDouble() < 0.35) {
-                            p.durability = 45.0;
-                            p.isBurning = false;
-                            log("🛡️ Главный механик спас турбину [" + (c + 1) + "," + (r + 1) + "] от аварии и восстановил 45% прочности!");
-                            SoundSystem.play("build");
-                            if (cellW > 0 && cellH > 0) {
-                                spawnSparkles(c * cellW + cellW / 2, (int)(canvas.getHeight() * 0.12) + r * cellH + 30, new Color(243, 156, 18));
+                        double healthFactor = (p.durability < 35.0) ? (p.durability / 35.0) : 1.0;
+                        double levelBonus = 1.0 + (p.level - 1) * 0.35;
+
+                        double kw = p.turbine.maxPowerKw * localWindEff * healthFactor * levelBonus * comboMultiplier * aeroMultiplier;
+                        double turbineIncome = p.turbine.baseIncomePerSec * localWindEff * healthFactor * levelBonus * comboMultiplier * rebirthMultiplier * summitMultiplier * winterTariff * bIncomeMult * greenTariffMult;
+
+                        if (p.turbine == TurbineType.SOLAR_HYBRID && isDaytime) {
+                            turbineIncome += (140.0 * levelBonus * rebirthMultiplier * summerSolar);
+                            kw += (800.0 * levelBonus * summerSolar);
+                        }
+
+                        if (p.turbine == TurbineType.OFFSHORE && b == Biome.OCEAN) {
+                            kw *= 1.50;
+                            turbineIncome *= 1.50;
+                        }
+
+                        if (turbineIncome < 1.0) turbineIncome = 1.0;
+
+                        currentTotalKw += kw;
+                        currentTotalEarnings += turbineIncome;
+
+                        double stormWear = (windSpeed > 15.0) ? 1.8 : 1.0;
+                        p.durability -= (p.turbine.wearRate / p.level) * stormWear * wearMultiplier;
+
+                        // Логика горения
+                        if (p.isBurning) {
+                            p.durability = Math.max(0.0, p.durability - 2.5);
+                            if (p.durability <= 0.0) {
+                                p.isBurning = false;
                             }
-                        } else {
-                            p.durability = 0.0;
-                            p.isBurning = false;
-                            log("⚠️ Внимание! Турбина на [" + (c + 1) + "," + (r + 1) + "] сломалась!");
+                        } else if (!tornadoActive && p.hasTurbine() && p.durability > 15.0) {
+                            boolean highStress = (windSpeed > 17.0 && p.durability < 65.0);
+                            double fireChance = highStress ? 0.025 : 0.0007;
+                            if (random.nextDouble() < fireChance) {
+                                p.isBurning = true;
+                                if (isCurrent) {
+                                    SoundSystem.play("siren");
+                                    log("🔥 АВАРИЯ! Перегрев и возгорание на слоте [" + (c + 1) + "," + (r + 1) + "]! Потушите кликом!");
+                                    floatingTexts.add(new FloatingText(canvas.getWidth() / 2, 70, "🔥 ПОЖАР НА ТУРБИНЕ!", new Color(231, 76, 60)));
+                                } else {
+                                    log("🔥 Аварийный датчик: пожар в локации " + b.title + " на слоте [" + (c + 1) + "," + (r + 1) + "]!");
+                                }
+                            }
                         }
-                    }
 
-                    if (cellW > 0 && Math.random() < 0.45) {
-                        int tx = c * cellW + cellW / 2 + random.nextInt(16) - 8;
-                        int ty = (int)(canvas.getHeight() * 0.12) + r * cellH + (int)(cellH * 0.42);
-                        floatingTexts.add(new FloatingText(tx, ty, "+$" + dfMoney.format(turbineIncome), new Color(46, 204, 113)));
+                        if (p.durability <= 0.0) {
+                            if (hiredChiefMechanic && random.nextDouble() < 0.35) {
+                                p.durability = 45.0;
+                                p.isBurning = false;
+                                log("🛡️ Главный механик спас турбину [" + (c + 1) + "," + (r + 1) + "] (" + b.title + ") от аварии!");
+                                SoundSystem.play("build");
+                                if (isCurrent && cellW > 0 && cellH > 0) {
+                                    spawnSparkles(c * cellW + cellW / 2, (int)(canvas.getHeight() * 0.12) + r * cellH + 30, new Color(243, 156, 18));
+                                }
+                            } else {
+                                p.durability = 0.0;
+                                p.isBurning = false;
+                                log("⚠️ Внимание! Турбина на [" + (c + 1) + "," + (r + 1) + "] (" + b.title + ") сломалась!");
+                            }
+                        }
+
+                        if (isCurrent && cellW > 0 && Math.random() < 0.45) {
+                            int tx = c * cellW + cellW / 2 + random.nextInt(16) - 8;
+                            int ty = (int)(canvas.getHeight() * 0.12) + r * cellH + (int)(cellH * 0.42);
+                            floatingTexts.add(new FloatingText(tx, ty, "+$" + dfMoney.format(turbineIncome), new Color(46, 204, 113)));
+                        }
                     }
                 }
             }
@@ -2995,14 +3072,16 @@ public class WindTycoon extends JFrame {
 
         if (engineersCount > 0) {
             double pool = engineersCount * 2.2;
-            for (int c = 0; c < COLS; c++) {
-                for (int r = 0; r < ROWS; r++) {
-                    Plot p = plots[c][r];
-                    if (p.hasTurbine() && p.durability < 98.0 && !p.isBurning && pool > 0) {
-                        double need = 100.0 - p.durability;
-                        double fix = Math.min(need, pool);
-                        p.durability += fix;
-                        pool -= fix;
+            for (Plot[][] bp : biomePlots.values()) {
+                for (int c = 0; c < COLS; c++) {
+                    for (int r = 0; r < ROWS; r++) {
+                        Plot p = bp[c][r];
+                        if (p.hasTurbine() && p.durability < 98.0 && !p.isBurning && pool > 0) {
+                            double need = 100.0 - p.durability;
+                            double fix = Math.min(need, pool);
+                            p.durability += fix;
+                            pool -= fix;
+                        }
                     }
                 }
             }
@@ -3836,9 +3915,11 @@ public class WindTycoon extends JFrame {
 
     private void triggerRebirth() {
         int turbineCount = 0;
-        for (int c = 0; c < COLS; c++) {
-            for (int r = 0; r < ROWS; r++) {
-                if (plots[c][r].hasTurbine()) turbineCount++;
+        for (Plot[][] bp : biomePlots.values()) {
+            for (int c = 0; c < COLS; c++) {
+                for (int r = 0; r < ROWS; r++) {
+                    if (bp[c][r].hasTurbine()) turbineCount++;
+                }
             }
         }
 
@@ -3864,11 +3945,14 @@ public class WindTycoon extends JFrame {
             isInsured = false;
             activeContract = null;
 
-            for (int c = 0; c < COLS; c++) {
-                for (int r = 0; r < ROWS; r++) {
-                    plots[c][r].turbine = null;
-                    plots[c][r].level = 1;
-                    plots[c][r].durability = 100.0;
+            for (Plot[][] bp : biomePlots.values()) {
+                for (int c = 0; c < COLS; c++) {
+                    for (int r = 0; r < ROWS; r++) {
+                        bp[c][r].turbine = null;
+                        bp[c][r].level = 1;
+                        bp[c][r].durability = 100.0;
+                        bp[c][r].isBurning = false;
+                    }
                 }
             }
             selectedPlot = null;
@@ -4036,16 +4120,27 @@ public class WindTycoon extends JFrame {
             extinguishBtn.setVisible(false);
         }
 
-        // Кнопки биомов
-        biomeValleyBtn.setText(currentBiome == Biome.VALLEY ? "🌲 Долина [АКТИВ]" : "🌲 Долина");
+        // Кнопки биомов со счетчиками активных выработок
+        int maxPerBiome = COLS * ROWS;
+        int valleyCount = countTurbinesInBiome(Biome.VALLEY);
+        int peaksCount = countTurbinesInBiome(Biome.PEAKS);
+        int oceanCount = countTurbinesInBiome(Biome.OCEAN);
+
+        biomeValleyBtn.setText(currentBiome == Biome.VALLEY ? 
+            "🌲 Долина (" + valleyCount + "/" + maxPerBiome + ") [АКТИВ]" : 
+            "🌲 Долина (" + valleyCount + "/" + maxPerBiome + ")");
         biomeValleyBtn.setEnabled(currentBiome != Biome.VALLEY);
 
         boolean peaksUnlocked = unlockedBiomes.contains("PEAKS");
-        biomePeaksBtn.setText(currentBiome == Biome.PEAKS ? "🏔️ Горы [АКТИВ]" : (peaksUnlocked ? "🏔️ Горы" : "🏔️ Горы ($15k)"));
+        biomePeaksBtn.setText(currentBiome == Biome.PEAKS ? 
+            "🏔️ Горы (" + peaksCount + "/" + maxPerBiome + ") [АКТИВ]" : 
+            (peaksUnlocked ? "🏔️ Горы (" + peaksCount + "/" + maxPerBiome + ")" : "🏔️ Горы ($15k)"));
         biomePeaksBtn.setEnabled(currentBiome != Biome.PEAKS);
 
         boolean oceanUnlocked = unlockedBiomes.contains("OCEAN");
-        biomeOceanBtn.setText(currentBiome == Biome.OCEAN ? "🌊 Шельф [АКТИВ]" : (oceanUnlocked ? "🌊 Шельф" : "🌊 Шельф ($35k)"));
+        biomeOceanBtn.setText(currentBiome == Biome.OCEAN ? 
+            "🌊 Шельф (" + oceanCount + "/" + maxPerBiome + ") [АКТИВ]" : 
+            (oceanUnlocked ? "🌊 Шельф (" + oceanCount + "/" + maxPerBiome + ")" : "🌊 Шельф ($35k)"));
         biomeOceanBtn.setEnabled(currentBiome != Biome.OCEAN);
 
         // Обновление кнопок Биржи
