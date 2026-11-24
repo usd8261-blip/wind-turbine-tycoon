@@ -44,6 +44,20 @@ public class GameEngine {
     public float marketPrice = 0.32f; // $/kWh
     public float marketDemand = 1.0f;
 
+    // Green Hydrogen & Mega-Projects
+    public float hydrogenStored = 0.0f;
+    public float hydrogenCapacity = 500.0f;
+    public boolean techHydrogenUnlocked = false;
+    public boolean techOrbitalLink = false;
+
+    // ESG Carbon Credits & City Policies
+    public int carbonCredits = 0;
+    public float carbonAccumulator = 0.0f;
+    public boolean policyGreenTariff = false;
+    public boolean policyDurability = false;
+    public boolean policyScience = false;
+    public boolean policyBattery = false;
+
     public float sciencePoints = 0.0f;
     public int prestigeCount = 0;
     public double prestigeMultiplier = 1.0;
@@ -131,12 +145,18 @@ public class GameEngine {
                 total += kw;
             }
         }
+        if (techOrbitalLink) {
+            total += 400.0f;
+        }
         return total;
     }
 
     public double getIncomePerSecond() {
         float kw = getTotalOutputKW();
         float price = marketPrice * (ResearchItem.GENERATOR.unlocked ? 1.25f : 1.0f);
+        if (policyGreenTariff) {
+            price *= 1.25f;
+        }
 
         // Winter Heating Demand Bonus x1.35
         if (currentSeason == Season.WINTER) {
@@ -228,6 +248,9 @@ public class GameEngine {
         if (ResearchItem.CHIEF_MECHANIC.unlocked) {
             wearMultiplier *= 0.70f; // -30% wear
         }
+        if (policyDurability) {
+            wearMultiplier *= 0.70f; // ESG durability policy
+        }
 
         for (int r = 0; r < 3; r++) {
             for (int c = 0; c < 3; c++) {
@@ -259,7 +282,28 @@ public class GameEngine {
                 if (!plots[r][c].isEmpty() && !plots[r][c].isBroken && !plots[r][c].isBurning) activeCount++;
             }
         }
-        sciencePoints += activeCount * 0.08f * dt;
+        float spGain = activeCount * 0.08f * dt;
+        if (policyScience) spGain *= 2.0f;
+        sciencePoints += spGain;
+
+        // Carbon Credits & Hydrogen
+        float kwTotal = getTotalOutputKW();
+        carbonAccumulator += (kwTotal / 3600.0f) * dt;
+        if (carbonAccumulator >= 1000.0f) {
+            int newCC = (int)(carbonAccumulator / 1000.0f);
+            carbonCredits += newCC;
+            carbonAccumulator -= newCC * 1000.0f;
+            addLog("🌿 ESG: +" + newCC + " Углеродных Кредитов (CC)!");
+            floatingTexts.add(new FloatingText(300, 200, "+" + newCC + " CC", 0xFF2ECC71));
+        }
+
+        if (techHydrogenUnlocked && kwTotal > 0) {
+            float effH2Cap = hydrogenCapacity * (policyBattery ? 1.5f : 1.0f);
+            float h2Gain = (0.35f + (kwTotal / 5000.0f) * 0.45f) * dt;
+            if (hydrogenStored < effH2Cap) {
+                hydrogenStored = Math.min(effH2Cap, hydrogenStored + h2Gain);
+            }
+        }
 
         // Contract timer
         if (currentContract != null && !currentContract.completed) {
@@ -461,8 +505,14 @@ public class GameEngine {
         if (sciencePoints >= item.costSP) {
             sciencePoints -= item.costSP;
             item.unlocked = true;
+            if (item == ResearchItem.HYDROGEN_PLANT) {
+                techHydrogenUnlocked = true;
+            } else if (item == ResearchItem.ORBITAL_BEAM) {
+                techOrbitalLink = true;
+            }
             addLog("🔬 Исследование завершено: " + item.title);
             sound.playSound("coin");
+            saveState();
             return true;
         }
         return false;
@@ -570,6 +620,49 @@ public class GameEngine {
         return false;
     }
 
+    public void sellHydrogen() {
+        if (!techHydrogenUnlocked || hydrogenStored <= 0.05f) return;
+        double payout = hydrogenStored * 2.40;
+        balance += payout;
+        addLog("💧 Продано " + String.format(Locale.US, "%.1f", hydrogenStored) + " кг H₂ за +$" + (int) payout);
+        floatingTexts.add(new FloatingText(300, 300, "+$" + (int) payout, 0xFF2ECC71));
+        sound.playSound("coin");
+        hydrogenStored = 0.0f;
+    }
+
+    public boolean buyPolicy(String policy) {
+        if ("TARIFF".equals(policy)) {
+            if (policyGreenTariff || carbonCredits < 50) return false;
+            carbonCredits -= 50;
+            policyGreenTariff = true;
+            addLog("🌿 Принята политика: Зеленый тариф (+25% к ценам)!");
+            sound.playSound("upgrade");
+            return true;
+        } else if ("DURABILITY".equals(policy)) {
+            if (policyDurability || carbonCredits < 40) return false;
+            carbonCredits -= 40;
+            policyDurability = true;
+            addLog("🛡️ Принята политика: Эко-Надёжность (-30% износ)!");
+            sound.playSound("upgrade");
+            return true;
+        } else if ("SCIENCE".equals(policy)) {
+            if (policyScience || carbonCredits < 60) return false;
+            carbonCredits -= 60;
+            policyScience = true;
+            addLog("🔬 Принята политика: Муниципальный грант (x2 SP)!");
+            sound.playSound("upgrade");
+            return true;
+        } else if ("BATTERY".equals(policy)) {
+            if (policyBattery || carbonCredits < 80) return false;
+            carbonCredits -= 80;
+            policyBattery = true;
+            addLog("🔋 Принята политика: Стратегический энергорезерв (+50% баки)!");
+            sound.playSound("upgrade");
+            return true;
+        }
+        return false;
+    }
+
     public void saveState() {
         try {
             SharedPreferences prefs = context.getSharedPreferences("WindTycoonPrefs", Context.MODE_PRIVATE);
@@ -582,6 +675,17 @@ public class GameEngine {
             ed.putLong("lastSaveTimestamp", System.currentTimeMillis());
             ed.putString("currentBiome", currentBiome.name());
             ed.putString("currentSeason", currentSeason.name());
+
+            ed.putFloat("hydrogenStored", hydrogenStored);
+            ed.putFloat("hydrogenCapacity", hydrogenCapacity);
+            ed.putBoolean("techHydrogenUnlocked", techHydrogenUnlocked);
+            ed.putBoolean("techOrbitalLink", techOrbitalLink);
+            ed.putInt("carbonCredits", carbonCredits);
+            ed.putFloat("carbonAccumulator", carbonAccumulator);
+            ed.putBoolean("policyGreenTariff", policyGreenTariff);
+            ed.putBoolean("policyDurability", policyDurability);
+            ed.putBoolean("policyScience", policyScience);
+            ed.putBoolean("policyBattery", policyBattery);
 
             for (int i = 0; i < unlockedBiomes.length; i++) {
                 ed.putBoolean("bio_" + i, unlockedBiomes[i]);
@@ -617,6 +721,17 @@ public class GameEngine {
             hasTechSupport = prefs.getBoolean("hasTech", false);
             hasInsurance = prefs.getBoolean("hasInsurance", false);
 
+            hydrogenStored = prefs.getFloat("hydrogenStored", 0.0f);
+            hydrogenCapacity = prefs.getFloat("hydrogenCapacity", 500.0f);
+            techHydrogenUnlocked = prefs.getBoolean("techHydrogenUnlocked", false);
+            techOrbitalLink = prefs.getBoolean("techOrbitalLink", false);
+            carbonCredits = prefs.getInt("carbonCredits", 0);
+            carbonAccumulator = prefs.getFloat("carbonAccumulator", 0.0f);
+            policyGreenTariff = prefs.getBoolean("policyGreenTariff", false);
+            policyDurability = prefs.getBoolean("policyDurability", false);
+            policyScience = prefs.getBoolean("policyScience", false);
+            policyBattery = prefs.getBoolean("policyBattery", false);
+
             String bName = prefs.getString("currentBiome", "VALLEY");
             try { currentBiome = Biome.valueOf(bName); } catch (Exception e) { currentBiome = Biome.VALLEY; }
 
@@ -630,6 +745,8 @@ public class GameEngine {
             for (ResearchItem item : ResearchItem.values()) {
                 item.unlocked = prefs.getBoolean("res_" + item.name(), false);
             }
+            if (ResearchItem.HYDROGEN_PLANT.unlocked) techHydrogenUnlocked = true;
+            if (ResearchItem.ORBITAL_BEAM.unlocked) techOrbitalLink = true;
 
             for (int r = 0; r < 3; r++) {
                 for (int c = 0; c < 3; c++) {

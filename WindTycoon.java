@@ -19,6 +19,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * ⚡ Wind Turbine Tycoon (Ultimate Edition)
@@ -152,52 +153,140 @@ public class WindTycoon extends JFrame {
     }
 
     // ==========================================
-    // === 1.1 ПЛЕЕР ФОНОВОЙ МУЗЫКИ (WAV / BGM)
+    // === 1.1 JUKEBOX И МУЛЬТИТРЕКОВЫЙ ПЛЕЕР (WAV)
     // ==========================================
     public static class MusicPlayer {
+        public static class TrackInfo {
+            public final String title;
+            public final File file;
+            public TrackInfo(String title, File file) {
+                this.title = title;
+                this.file = file;
+            }
+        }
+
+        private static final List<TrackInfo> playlist = new ArrayList<>();
+        private static int currentTrackIndex = 0;
         private static Clip musicClip = null;
         private static boolean isMuted = false;
+        private static Consumer<String> onTrackChangeListener = null;
 
-        public static void initAndPlay() {
-            new Thread(() -> {
-                try {
-                    File musicFile = findMusicFile();
-                    if (musicFile != null && musicFile.exists()) {
-                        if (musicClip != null) {
-                            musicClip.stop();
-                            musicClip.close();
+        public static void setOnTrackChangeListener(Consumer<String> listener) {
+            onTrackChangeListener = listener;
+            if (!playlist.isEmpty()) {
+                notifyTrackChanged();
+            }
+        }
+
+        private static void notifyTrackChanged() {
+            if (onTrackChangeListener != null && !playlist.isEmpty()) {
+                SwingUtilities.invokeLater(() -> {
+                    onTrackChangeListener.accept(getCurrentTrackTitle());
+                });
+            }
+        }
+
+        public static void initPlaylist() {
+            playlist.clear();
+            addIfValid("⚡ 8-Bit Synth Breeze", "music/bgm.wav");
+            addIfValid("🌃 Midnight Architecture", "music/Midnight_Architecture.wav");
+            addIfValid("🍃 The Gentle Ascent", "music/The_Gentle_Ascent.wav");
+            addIfValid("🌅 The Morning Projection", "music/The_Morning_Projection.wav");
+
+            // Сканирование директории на наличие других .wav файлов
+            File mDir = new File("music");
+            if (mDir.exists() && mDir.isDirectory()) {
+                File[] list = mDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".wav"));
+                if (list != null) {
+                    for (File f : list) {
+                        boolean alreadyAdded = false;
+                        for (TrackInfo t : playlist) {
+                            if (t.file.getAbsolutePath().equalsIgnoreCase(f.getAbsolutePath())) {
+                                alreadyAdded = true;
+                                break;
+                            }
                         }
-                        AudioInputStream ais = AudioSystem.getAudioInputStream(musicFile);
-                        musicClip = AudioSystem.getClip();
-                        musicClip.open(ais);
-
-                        if (musicClip.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
-                            FloatControl gain = (FloatControl) musicClip.getControl(FloatControl.Type.MASTER_GAIN);
-                            gain.setValue(-6.0f);
-                        }
-
-                        if (!isMuted) {
-                            musicClip.loop(Clip.LOOP_CONTINUOUSLY);
+                        if (!alreadyAdded) {
+                            String name = f.getName().replace(".wav", "").replace("_", " ");
+                            playlist.add(new TrackInfo("🎵 " + name, f));
                         }
                     }
-                } catch (Exception ex) {
-                    System.err.println("Music error: " + ex.getMessage());
+                }
+            }
+        }
+
+        private static void addIfValid(String title, String path) {
+            File f = new File(path);
+            if (f.exists() && f.length() > 0) {
+                playlist.add(new TrackInfo(title, f));
+            }
+        }
+
+        public static void initAndPlay() {
+            initPlaylist();
+            if (!playlist.isEmpty()) {
+                playTrack(0);
+            }
+        }
+
+        public static synchronized void playTrack(int index) {
+            if (playlist.isEmpty()) return;
+            currentTrackIndex = (index % playlist.size() + playlist.size()) % playlist.size();
+            TrackInfo track = playlist.get(currentTrackIndex);
+            notifyTrackChanged();
+
+            new Thread(() -> {
+                synchronized (MusicPlayer.class) {
+                    try {
+                        if (musicClip != null) {
+                            try { musicClip.stop(); } catch (Exception ignored) {}
+                            try { musicClip.close(); } catch (Exception ignored) {}
+                            musicClip = null;
+                        }
+                        if (track.file.exists()) {
+                            AudioInputStream ais = AudioSystem.getAudioInputStream(track.file);
+                            musicClip = AudioSystem.getClip();
+                            musicClip.open(ais);
+
+                            if (musicClip.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
+                                FloatControl gain = (FloatControl) musicClip.getControl(FloatControl.Type.MASTER_GAIN);
+                                gain.setValue(-6.0f);
+                            }
+
+                            if (!isMuted) {
+                                musicClip.loop(Clip.LOOP_CONTINUOUSLY);
+                            }
+                        }
+                    } catch (Exception ex) {
+                        System.err.println("Music error (" + track.title + "): " + ex.getMessage());
+                    }
                 }
             }).start();
         }
 
+        public static void nextTrack() {
+            if (playlist.isEmpty()) return;
+            playTrack(currentTrackIndex + 1);
+        }
+
+        public static void prevTrack() {
+            if (playlist.isEmpty()) return;
+            playTrack(currentTrackIndex - 1);
+        }
+
+        public static String getCurrentTrackTitle() {
+            if (playlist.isEmpty()) return "Нет треков";
+            return playlist.get(currentTrackIndex).title;
+        }
+
+        public static boolean hasTracks() {
+            return !playlist.isEmpty();
+        }
+
         public static File findMusicFile() {
-            String[] preferred = {"music/bgm.wav", "music/music.wav", "bgm.wav", "music.wav"};
-            for (String p : preferred) {
-                File f = new File(p);
-                if (f.exists() && f.length() > 0) return f;
-            }
-            File mDir = new File("music");
-            if (mDir.exists() && mDir.isDirectory()) {
-                File[] list = mDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".wav"));
-                if (list != null && list.length > 0) return list[0];
-            }
-            return null;
+            if (!playlist.isEmpty()) return playlist.get(0).file;
+            File f = new File("music/bgm.wav");
+            return f.exists() ? f : null;
         }
 
         public static boolean toggleMute() {
@@ -208,8 +297,8 @@ public class WindTycoon extends JFrame {
                 } else {
                     musicClip.loop(Clip.LOOP_CONTINUOUSLY);
                 }
-            } else if (!isMuted) {
-                initAndPlay();
+            } else if (!isMuted && !playlist.isEmpty()) {
+                playTrack(currentTrackIndex);
             }
             return !isMuted;
         }
@@ -451,6 +540,185 @@ public class WindTycoon extends JFrame {
     }
 
     // ==========================================
+    // === 2.2 СКИНЫ, ЭВОЛЮЦИЯ ГОРОДА И ГРАФИК
+    // ==========================================
+    public enum TurbineSkin {
+        CLASSIC("🌿 Классик Эко", "Белоснежная сталь и изумрудный индикатор",
+                new Color(245, 248, 255), new Color(160, 175, 190), new Color(46, 204, 113), new Color(0, 255, 180)),
+        CYBERPUNK("⚡ ТРОН Неон", "Матовый карбон, неоновые линии и вспышки",
+                new Color(24, 26, 35), new Color(10, 12, 18), new Color(255, 0, 128), new Color(0, 240, 255)),
+        GOLD("👑 Золотой Люкс", "Позолоченные роторы и сияющие пилоны",
+                new Color(255, 220, 90), new Color(190, 140, 25), new Color(255, 215, 0), new Color(255, 240, 150)),
+        STEAMPUNK("⚙️ Стимпанк Медь", "Кованая медь, латунные заклёпки и янтарь",
+                new Color(190, 120, 60), new Color(125, 65, 20), new Color(243, 156, 18), new Color(255, 180, 50));
+
+        public final String title;
+        public final String desc;
+        public final Color mastLight;
+        public final Color mastDark;
+        public final Color accentColor;
+        public final Color neonGlow;
+
+        TurbineSkin(String title, String desc, Color mastLight, Color mastDark, Color accentColor, Color neonGlow) {
+            this.title = title;
+            this.desc = desc;
+            this.mastLight = mastLight;
+            this.mastDark = mastDark;
+            this.accentColor = accentColor;
+            this.neonGlow = neonGlow;
+        }
+    }
+
+    public enum CityStage {
+        VILLAGE("🏡 Селение", 0.0, "Тайкун на заре: деревянные домики, печные трубы и уют."),
+        TOWN("🏭 Индустриальный городок", 3500.0, "Кирпичные мануфактуры, водонапорная башня и заводы."),
+        METROPOLIS("🏙️ Мегаполис", 20000.0, "Стеклянные небоскребы, вертолетные площадки и парки на крышах."),
+        NEO_CITY("🚀 Нео-Сити (Киберпанк)", 80000.0, "Голографические билборды, летающие ховеркары и энергомосты.");
+
+        public final String title;
+        public final double requiredKwh;
+        public final String desc;
+
+        CityStage(String title, double requiredKwh, String desc) {
+            this.title = title;
+            this.requiredKwh = requiredKwh;
+            this.desc = desc;
+        }
+
+        public static CityStage detect(double energy, int rebirth) {
+            if (rebirth >= 1 || energy >= 80000.0) return NEO_CITY;
+            if (energy >= 20000.0) return METROPOLIS;
+            if (energy >= 3500.0) return TOWN;
+            return VILLAGE;
+        }
+    }
+
+    private static class HoverCar {
+        double x, y, speed;
+        int dir; // 1: right, -1: left
+        Color neonColor;
+
+        HoverCar(double x, double y, double speed, int dir, Color neonColor) {
+            this.x = x;
+            this.y = y;
+            this.speed = speed;
+            this.dir = dir;
+            this.neonColor = neonColor;
+        }
+    }
+
+    public class MarketChartPanel extends JPanel {
+        public MarketChartPanel() {
+            setOpaque(false);
+            setPreferredSize(new Dimension(280, 68));
+            setMinimumSize(new Dimension(180, 55));
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int w = getWidth();
+            int h = getHeight();
+            if (w <= 10 || h <= 10) {
+                g2.dispose();
+                return;
+            }
+
+            g2.setColor(new Color(13, 17, 26));
+            g2.fillRoundRect(0, 0, w, h, 8, 8);
+            g2.setColor(new Color(38, 48, 66));
+            g2.drawRoundRect(0, 0, w - 1, h - 1, 8, 8);
+
+            // Dotted grid lines
+            g2.setColor(new Color(28, 38, 54));
+            g2.setStroke(new BasicStroke(1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10.0f, new float[]{3.0f, 3.0f}, 0.0f));
+            for (int yLine = h / 3; yLine < h; yLine += h / 3) {
+                g2.drawLine(5, yLine, w - 5, yLine);
+            }
+
+            if (priceHistory.isEmpty()) {
+                g2.dispose();
+                return;
+            }
+
+            double min = Double.MAX_VALUE;
+            double max = Double.MIN_VALUE;
+            for (double p : priceHistory) {
+                if (p < min) min = p;
+                if (p > max) max = p;
+            }
+            if (max <= min) max = min + 0.1;
+            double padMin = Math.max(0.05, min * 0.85);
+            double padMax = max * 1.15;
+            double range = padMax - padMin;
+
+            int n = priceHistory.size();
+            int padX = 8;
+            int padY = 6;
+            int chartW = w - padX * 2;
+            int chartH = h - padY * 2;
+
+            Path2D.Double linePath = new Path2D.Double();
+            Path2D.Double fillPath = new Path2D.Double();
+
+            for (int i = 0; i < n; i++) {
+                double val = priceHistory.get(i);
+                double norm = (val - padMin) / range;
+                double px = padX + (double) i / (Math.max(1, n - 1)) * chartW;
+                double py = padY + chartH - (norm * chartH);
+
+                if (i == 0) {
+                    linePath.moveTo(px, py);
+                    fillPath.moveTo(px, padY + chartH);
+                    fillPath.lineTo(px, py);
+                } else {
+                    linePath.lineTo(px, py);
+                    fillPath.lineTo(px, py);
+                }
+            }
+            fillPath.lineTo(padX + chartW, padY + chartH);
+            fillPath.closePath();
+
+            boolean isPeak = marketMultiplier > 1.8;
+            Color primaryColor = isPeak ? new Color(255, 82, 82) : new Color(0, 210, 211);
+            Color fillTop = isPeak ? new Color(255, 82, 82, 90) : new Color(0, 210, 211, 70);
+            Color fillBot = new Color(primaryColor.getRed(), primaryColor.getGreen(), primaryColor.getBlue(), 5);
+
+            GradientPaint gp = new GradientPaint(0, padY, fillTop, 0, padY + chartH, fillBot);
+            g2.setPaint(gp);
+            g2.fill(fillPath);
+
+            g2.setColor(primaryColor);
+            g2.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g2.draw(linePath);
+
+            double lastVal = priceHistory.get(n - 1);
+            double lastNorm = (lastVal - padMin) / range;
+            int lastX = padX + chartW;
+            int lastY = (int) (padY + chartH - (lastNorm * chartH));
+
+            g2.setColor(new Color(primaryColor.getRed(), primaryColor.getGreen(), primaryColor.getBlue(), 120));
+            g2.fillOval(lastX - 5, lastY - 5, 10, 10);
+            g2.setColor(Color.WHITE);
+            g2.fillOval(lastX - 3, lastY - 3, 6, 6);
+
+            g2.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 9));
+            g2.setColor(new Color(180, 195, 215));
+            g2.drawString("БИРЖЕВОЙ ОСЦИЛЛОГРАФ", padX + 2, padY + 9);
+
+            if (isPeak) {
+                g2.setColor(new Color(255, 75, 75));
+                g2.drawString("⚡ ПИКОВЫЙ СПРОС!", padX + 130, padY + 9);
+            }
+
+            g2.dispose();
+        }
+    }
+
+    // ==========================================
     // === 3. СОСТОЯНИЕ ИГРЫ И ЭКОНОМИКА
     // ==========================================
     private double balance = 1500.0;
@@ -547,6 +815,25 @@ public class WindTycoon extends JFrame {
     private final List<SnowFlake> snowFlakes = new ArrayList<>();
     private final List<SmokeParticle> smokeParticles = new ArrayList<>();
 
+    // 11. 💧 Зеленый водород и Мега-проекты
+    private boolean techHydrogenUnlocked = false;
+    private double hydrogenStored = 0.0;
+    private double hydrogenCapacity = 500.0;
+    private boolean techOrbitalLink = false;
+
+    // 12. 🌿 ESG Углеродные кредиты и Зеленые политики
+    private int carbonCredits = 0;
+    private double carbonAccumulator = 0.0;
+    private boolean policyGreenTariff = false;
+    private boolean policyDurability = false;
+    private boolean policyScience = false;
+    private boolean policyBattery = false;
+
+    // 13. 🎨 Скины турбин и История биржи
+    private TurbineSkin currentSkin = TurbineSkin.CLASSIC;
+    private final List<Double> priceHistory = new ArrayList<>();
+    private final List<HoverCar> hoverCars = new ArrayList<>();
+
     // Сетка участков (4x3 = 12 платформ)
     private static final int COLS = 4;
     private static final int ROWS = 3;
@@ -578,9 +865,11 @@ public class WindTycoon extends JFrame {
     private JLabel powerVal;
     private JLabel batteryVal;
     private JLabel scienceVal;
+    private JLabel carbonBadge;
     private JLabel rebirthBadge;
     private JLabel timeBadge;
     private JLabel musicVal;
+    private JLabel musicTrackLbl;
     private JLabel contractStatusLbl;
 
     // Нижняя консоль управления и навигация по вкладкам
@@ -622,6 +911,10 @@ public class WindTycoon extends JFrame {
     private JLabel brokerStatusLbl;
     private StyledButton buyBatteryBtn;
     private StyledButton sellBatteryBtn;
+    private JLabel hydrogenStatusLbl;
+    private JProgressBar hydrogenProgressBar;
+    private StyledButton sellHydrogenBtn;
+    private MarketChartPanel marketChartPanel;
 
     // Элементы вкладки "Наука"
     private JLabel scienceBalanceLbl;
@@ -631,6 +924,8 @@ public class WindTycoon extends JFrame {
     private StyledButton upgRadarBtn;
     private StyledButton upgDronesUnlockBtn;
     private StyledButton buyDroneBtn;
+    private StyledButton upgHydrogenBtn;
+    private StyledButton upgOrbitalLinkBtn;
     private StyledButton hireMeteorologistBtn;
     private StyledButton hireBrokerBtn;
     private StyledButton hireChiefMechanicBtn;
@@ -643,6 +938,18 @@ public class WindTycoon extends JFrame {
     private StyledButton importSaveBtn;
     private StyledButton saveBtn;
     private StyledButton resetBtn;
+
+    // Зеленые политики ESG и Скины (Престиж)
+    private JLabel carbonCreditsStatusLbl;
+    private StyledButton policyTariffBtn;
+    private StyledButton policyDurabilityBtn;
+    private StyledButton policyScienceBtn;
+    private StyledButton policyBatteryBtn;
+    private JLabel currentSkinLbl;
+    private StyledButton skinClassicBtn;
+    private StyledButton skinCyberpunkBtn;
+    private StyledButton skinGoldBtn;
+    private StyledButton skinSteampunkBtn;
 
     // Журнал событий (Центр событий)
     public enum LogCategory {
@@ -758,6 +1065,17 @@ public class WindTycoon extends JFrame {
 
         unlockedBiomes.add(Biome.VALLEY.name());
 
+        for (int i = 0; i < 40; i++) {
+            priceHistory.add(0.18 + (i % 5) * 0.02);
+        }
+
+        hoverCars.add(new HoverCar(50, 18, 1.8, 1, new Color(0, 240, 255)));
+        hoverCars.add(new HoverCar(420, 18, 2.2, 1, new Color(0, 255, 180)));
+        hoverCars.add(new HoverCar(820, 18, 1.9, 1, new Color(0, 240, 255)));
+        hoverCars.add(new HoverCar(250, 34, 1.6, -1, new Color(255, 0, 128)));
+        hoverCars.add(new HoverCar(680, 34, 2.1, -1, new Color(255, 100, 200)));
+        hoverCars.add(new HoverCar(1050, 34, 1.7, -1, new Color(255, 0, 128)));
+
         initComponents();
         loadGame();
         checkOfflineProgress();
@@ -773,6 +1091,86 @@ public class WindTycoon extends JFrame {
         }
     }
 
+    private void styleMiniHudBtn(JButton b) {
+        b.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        b.setForeground(new Color(220, 235, 255));
+        b.setBackground(new Color(36, 48, 68));
+        b.setBorder(BorderFactory.createEmptyBorder(2, 5, 2, 5));
+        b.setFocusPainted(false);
+        b.setContentAreaFilled(false);
+        b.setOpaque(true);
+        b.setCursor(new Cursor(Cursor.HAND_CURSOR));
+    }
+
+    private JPanel createJukeboxPill() {
+        JPanel pill = new JPanel(new FlowLayout(FlowLayout.CENTER, 5, 2)) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(24, 32, 46));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 12, 12);
+                g2.setColor(new Color(0, 180, 216, 180));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12);
+                g2.dispose();
+            }
+        };
+        pill.setOpaque(false);
+        pill.setBorder(BorderFactory.createEmptyBorder(1, 8, 1, 8));
+
+        JLabel titleTag = new JLabel("📻 JUKEBOX:");
+        titleTag.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        titleTag.setForeground(new Color(0, 210, 211));
+
+        JButton prevBtn = new JButton("⏮");
+        styleMiniHudBtn(prevBtn);
+        prevBtn.addActionListener(e -> {
+            MusicPlayer.prevTrack();
+            SoundSystem.play("click");
+        });
+
+        musicTrackLbl = new JLabel(MusicPlayer.getCurrentTrackTitle());
+        musicTrackLbl.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        musicTrackLbl.setForeground(Color.WHITE);
+        musicTrackLbl.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        musicTrackLbl.setToolTipText("Кликните для переключения на следующий трек");
+        musicTrackLbl.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                MusicPlayer.nextTrack();
+                SoundSystem.play("click");
+            }
+        });
+
+        JButton nextBtn = new JButton("⏭");
+        styleMiniHudBtn(nextBtn);
+        nextBtn.addActionListener(e -> {
+            MusicPlayer.nextTrack();
+            SoundSystem.play("click");
+        });
+
+        JButton muteBtn = new JButton(MusicPlayer.isMuted() ? "🔇" : "🔊");
+        styleMiniHudBtn(muteBtn);
+        muteBtn.addActionListener(e -> {
+            boolean active = MusicPlayer.toggleMute();
+            muteBtn.setText(active ? "🔊" : "🔇");
+            SoundSystem.play("click");
+        });
+
+        MusicPlayer.setOnTrackChangeListener(title -> {
+            if (musicTrackLbl != null) {
+                musicTrackLbl.setText(title);
+            }
+        });
+
+        pill.add(titleTag);
+        pill.add(prevBtn);
+        pill.add(musicTrackLbl);
+        pill.add(nextBtn);
+        pill.add(muteBtn);
+        return pill;
+    }
+
     private void initComponents() {
         // === ВЕРХНИЙ HUD (STATUS PILLS) ===
         JPanel topHud = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 7));
@@ -784,22 +1182,12 @@ public class WindTycoon extends JFrame {
         topHud.add(createHudPill("⚡ Сеть", powerVal = new JLabel("0.0 кВт"), new Color(254, 202, 87)));
         topHud.add(createHudPill("🔋 Батарея", batteryVal = new JLabel("Нет"), new Color(52, 152, 219)));
         topHud.add(createHudPill("🔬 Наука", scienceVal = new JLabel("0.0 SP"), new Color(155, 89, 182)));
+        topHud.add(createHudPill("🌿 ESG", carbonBadge = new JLabel("0 CC"), new Color(38, 222, 129)));
         topHud.add(createHudPill("👑 Престиж", rebirthBadge = new JLabel("R0 (x1.0)"), new Color(241, 196, 15)));
         topHud.add(createHudPill("🕒 Время", timeBadge = new JLabel("☀️ День"), new Color(255, 234, 167)));
 
-        // Кнопка включения/выключения фоновой музыки
-        JPanel musicPill = createHudPill("🎵 Музыка", musicVal = new JLabel("🔊 Вкл"), new Color(100, 200, 255));
-        musicPill.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        musicPill.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mousePressed(MouseEvent e) {
-                boolean active = MusicPlayer.toggleMute();
-                musicVal.setText(active ? "🔊 Вкл" : "🔇 Выкл");
-                musicVal.setForeground(active ? Color.WHITE : new Color(140, 150, 165));
-                SoundSystem.play("click");
-            }
-        });
-        topHud.add(musicPill);
+        JPanel jukeboxPill = createJukeboxPill();
+        topHud.add(jukeboxPill);
 
         add(topHud, BorderLayout.NORTH);
 
@@ -1074,14 +1462,14 @@ public class WindTycoon extends JFrame {
         JPanel p = new JPanel(new GridLayout(1, 3, 10, 0));
         p.setOpaque(false);
 
-        // Колонка 1: Подстанция накопителей
-        JPanel col1 = createCardPanel("🔋 ПОДСТАНЦИЯ НАКОПИТЕЛЕЙ", new Color(52, 152, 219));
+        // Колонка 1: Подстанция накопителей & Завод Водорода H2
+        JPanel col1 = createCardPanel("🔋 НАКОПИТЕЛИ & H₂ ВОДОРОД", new Color(52, 152, 219));
         JPanel batContent = new JPanel();
         batContent.setLayout(new BoxLayout(batContent, BoxLayout.Y_AXIS));
         batContent.setOpaque(false);
 
         batteryStatusLbl = new JLabel("Хранилище: 0 / 0 кВт⋅ч (0%)");
-        batteryStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 11));
+        batteryStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
         batteryStatusLbl.setForeground(Color.WHITE);
 
         batteryProgressBar = new JProgressBar(0, 100);
@@ -1089,29 +1477,59 @@ public class WindTycoon extends JFrame {
         batteryProgressBar.setForeground(new Color(0, 210, 211));
         batteryProgressBar.setBackground(new Color(15, 20, 30));
         batteryProgressBar.setBorderPainted(false);
-        batteryProgressBar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 16));
+        batteryProgressBar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 14));
 
         buyBatteryBtn = new StyledButton("🔋 Купить батарею 1,000 кВт⋅ч ($4k)", new Color(41, 128, 185), e -> upgradeBattery());
-        buyBatteryBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        buyBatteryBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
 
         sellBatteryBtn = new StyledButton("⚡ Сбросить заряд на биржу ($0.00)", new Color(230, 126, 34), e -> dumpBatteryToMarket());
-        sellBatteryBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        sellBatteryBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+
+        // Водород
+        JLabel h2Header = new JLabel("💧 ЗЕЛЕНЫЙ ВОДОРОД (H₂):");
+        h2Header.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        h2Header.setForeground(new Color(0, 255, 180));
+
+        hydrogenStatusLbl = new JLabel("Завод H₂ не исследован");
+        hydrogenStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
+        hydrogenStatusLbl.setForeground(new Color(180, 220, 250));
+
+        hydrogenProgressBar = new JProgressBar(0, 100);
+        hydrogenProgressBar.setValue(0);
+        hydrogenProgressBar.setForeground(new Color(46, 204, 113));
+        hydrogenProgressBar.setBackground(new Color(15, 20, 30));
+        hydrogenProgressBar.setBorderPainted(false);
+        hydrogenProgressBar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 10));
+
+        sellHydrogenBtn = new StyledButton("💧 Продать H₂ ($2.40/кг)", new Color(39, 174, 96), e -> sellHydrogen());
+        sellHydrogenBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
 
         batContent.add(batteryStatusLbl);
-        batContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        batContent.add(Box.createRigidArea(new Dimension(0, 3)));
         batContent.add(batteryProgressBar);
-        batContent.add(Box.createRigidArea(new Dimension(0, 10)));
+        batContent.add(Box.createRigidArea(new Dimension(0, 5)));
         batContent.add(buyBatteryBtn);
-        batContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        batContent.add(Box.createRigidArea(new Dimension(0, 3)));
         batContent.add(sellBatteryBtn);
+        batContent.add(Box.createRigidArea(new Dimension(0, 6)));
+        batContent.add(h2Header);
+        batContent.add(Box.createRigidArea(new Dimension(0, 2)));
+        batContent.add(hydrogenStatusLbl);
+        batContent.add(Box.createRigidArea(new Dimension(0, 2)));
+        batContent.add(hydrogenProgressBar);
+        batContent.add(Box.createRigidArea(new Dimension(0, 4)));
+        batContent.add(sellHydrogenBtn);
         col1.add(batContent, BorderLayout.CENTER);
         p.add(col1);
 
-        // Колонка 2: Биржа и контракт города
-        JPanel col2 = createCardPanel("📊 БИРЖА & КОНТРАКТЫ", new Color(155, 89, 182));
+        // Колонка 2: Биржа и контракт города + Живой осциллограф
+        JPanel col2 = createCardPanel("📊 БИРЖА & ТРЕНДЫ", new Color(155, 89, 182));
         JPanel mktContent = new JPanel();
         mktContent.setLayout(new BoxLayout(mktContent, BoxLayout.Y_AXIS));
         mktContent.setOpaque(false);
+
+        marketChartPanel = new MarketChartPanel();
+        marketChartPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 65));
 
         marketPriceLbl = new JLabel("Тариф: $0.18 / кВт⋅ч [Обычный]");
         marketPriceLbl.setFont(new Font(Font.DIALOG, Font.BOLD, 11));
@@ -1122,13 +1540,15 @@ public class WindTycoon extends JFrame {
         contractHeader.setForeground(new Color(0, 210, 211));
 
         contractStatusLbl = new JLabel("Ожидание заказа мэрии...");
-        contractStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 11));
+        contractStatusLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
         contractStatusLbl.setForeground(Color.WHITE);
 
+        mktContent.add(marketChartPanel);
+        mktContent.add(Box.createRigidArea(new Dimension(0, 5)));
         mktContent.add(marketPriceLbl);
-        mktContent.add(Box.createRigidArea(new Dimension(0, 10)));
+        mktContent.add(Box.createRigidArea(new Dimension(0, 5)));
         mktContent.add(contractHeader);
-        mktContent.add(Box.createRigidArea(new Dimension(0, 4)));
+        mktContent.add(Box.createRigidArea(new Dimension(0, 2)));
         mktContent.add(contractStatusLbl);
         col2.add(mktContent, BorderLayout.CENTER);
         p.add(col2);
@@ -1189,28 +1609,37 @@ public class WindTycoon extends JFrame {
         col1.add(spContent, BorderLayout.CENTER);
         p.add(col1);
 
-        // Колонка 2: Защита и Дроны
-        JPanel col2 = createCardPanel("⚡ ИНЖЕНЕРНЫЕ СИСТЕМЫ", new Color(230, 126, 34));
+        // Колонка 2: Защита и Дроны + Мега-проекты
+        JPanel col2 = createCardPanel("⚡ ИНЖЕНЕРНЫЕ СИСТЕМЫ & R&D", new Color(230, 126, 34));
         JPanel techContent = new JPanel();
         techContent.setLayout(new BoxLayout(techContent, BoxLayout.Y_AXIS));
         techContent.setOpaque(false);
 
         upgLightningBtn = new StyledButton("⚡ Громоотвод (100 SP)", new Color(241, 196, 15), e -> researchLightning());
-        upgLightningBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        upgLightningBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
         upgRadarBtn = new StyledButton("📡 Радар раннего оповещения (150 SP)", new Color(155, 89, 182), e -> researchRadar());
-        upgRadarBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        upgRadarBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
         upgDronesUnlockBtn = new StyledButton("🤖 Чертеж дронов (220 SP)", new Color(230, 126, 34), e -> researchDrones());
-        upgDronesUnlockBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        upgDronesUnlockBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
         buyDroneBtn = new StyledButton("🚁 Купить ремонтного дрона ($5,000)", new Color(26, 188, 156), e -> buyDrone());
-        buyDroneBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
+        buyDroneBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+
+        upgHydrogenBtn = new StyledButton("💧 Завод электролиза H₂ (120 SP)", new Color(46, 204, 113), e -> researchHydrogen());
+        upgHydrogenBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+        upgOrbitalLinkBtn = new StyledButton("🛰️ Орбитальный СВЧ-Луч (350 SP / $50k)", new Color(0, 210, 211), e -> researchOrbitalLink());
+        upgOrbitalLinkBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
 
         techContent.add(upgLightningBtn);
-        techContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        techContent.add(Box.createRigidArea(new Dimension(0, 3)));
         techContent.add(upgRadarBtn);
-        techContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        techContent.add(Box.createRigidArea(new Dimension(0, 3)));
         techContent.add(upgDronesUnlockBtn);
-        techContent.add(Box.createRigidArea(new Dimension(0, 5)));
+        techContent.add(Box.createRigidArea(new Dimension(0, 3)));
         techContent.add(buyDroneBtn);
+        techContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        techContent.add(upgHydrogenBtn);
+        techContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        techContent.add(upgOrbitalLinkBtn);
         col2.add(techContent, BorderLayout.CENTER);
         p.add(col2);
 
@@ -1238,59 +1667,119 @@ public class WindTycoon extends JFrame {
         return p;
     }
 
-    // === ВКЛАДКА 4: ПРЕСТИЖ (REBIRTH) И СОХРАНЕНИЯ ===
+    // === ВКЛАДКА 4: ПРЕСТИЖ (REBIRTH), СКИНЫ, ПОЛИТИКИ И СОХРАНЕНИЯ ===
     private JPanel createPrestigeTab() {
-        JPanel p = new JPanel(new GridLayout(1, 3, 10, 0));
+        JPanel p = new JPanel(new GridLayout(1, 4, 8, 0));
         p.setOpaque(false);
 
-        // Колонка 1: Rebirth
-        JPanel col1 = createCardPanel("👑 ВЫХОД НА IPO (REBIRTH)", new Color(241, 196, 15));
+        // Колонка 1: Rebirth & Сохранения
+        JPanel col1 = createCardPanel("👑 IPO & ДАННЫЕ", new Color(241, 196, 15));
         JPanel rebContent = new JPanel();
         rebContent.setLayout(new BoxLayout(rebContent, BoxLayout.Y_AXIS));
         rebContent.setOpaque(false);
 
-        rebirthInfoLbl = new JLabel("Бонус: +0%  |  Требуется: $100,000 и 6 вышек");
+        rebirthInfoLbl = new JLabel("Бонус: +0%  |  Требуется: $100k и 6 вышек");
         rebirthInfoLbl.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
         rebirthInfoLbl.setForeground(Color.WHITE);
 
-        rebirthBtn = new StyledButton("🌟 СОВЕРШИТЬ REBIRTH (+50% доход)", new Color(241, 196, 15), e -> triggerRebirth());
-        rebirthBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        rebirthBtn = new StyledButton("🌟 ВЫХОД НА IPO (+50% доход)", new Color(241, 196, 15), e -> triggerRebirth());
+        rebirthBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26));
 
-        JLabel rebDesc = new JLabel("<html><font color='#94A3B8'>Сброс поля и баланса в обмен на вечный множитель прибыли +50% и стартовые токены.</font></html>");
-        rebDesc.setFont(new Font(Font.DIALOG, Font.PLAIN, 10));
-
-        rebContent.add(rebirthInfoLbl);
-        rebContent.add(Box.createRigidArea(new Dimension(0, 8)));
-        rebContent.add(rebirthBtn);
-        rebContent.add(Box.createRigidArea(new Dimension(0, 8)));
-        rebContent.add(rebDesc);
-        col1.add(rebContent, BorderLayout.CENTER);
-        p.add(col1);
-
-        // Колонка 2: Достижения
-        JPanel col2 = createCardPanel("🏆 ДОСТИЖЕНИЯ ТАЙКУНА", new Color(46, 204, 113));
-        achievementsPanel = new JPanel(new GridLayout(4, 2, 4, 3));
-        achievementsPanel.setOpaque(false);
-        col2.add(achievementsPanel, BorderLayout.CENTER);
-        updateAchievementsView();
-        p.add(col2);
-
-        // Колонка 3: Сохранения
-        JPanel col3 = createCardPanel("💾 УПРАВЛЕНИЕ ДАННЫМИ", new Color(52, 152, 219));
-        JPanel saveGrid = new JPanel(new GridLayout(2, 2, 6, 6));
+        JPanel saveGrid = new JPanel(new GridLayout(2, 2, 4, 4));
         saveGrid.setOpaque(false);
-
-        saveBtn = new StyledButton("💾 Сохранить", new Color(46, 204, 113), e -> saveGame(true));
+        saveBtn = new StyledButton("💾 Сейв", new Color(46, 204, 113), e -> saveGame(true));
         resetBtn = new StyledButton("🔄 Сброс", new Color(192, 57, 43), e -> resetGame());
-        exportSaveBtn = new StyledButton("📋 Экспорт (Base64)", new Color(52, 152, 219), e -> exportSaveCode());
-        importSaveBtn = new StyledButton("📥 Импорт (Код)", new Color(155, 89, 182), e -> importSaveCode());
-
+        exportSaveBtn = new StyledButton("📋 Код", new Color(52, 152, 219), e -> exportSaveCode());
+        importSaveBtn = new StyledButton("📥 Ввод", new Color(155, 89, 182), e -> importSaveCode());
         saveGrid.add(saveBtn);
         saveGrid.add(resetBtn);
         saveGrid.add(exportSaveBtn);
         saveGrid.add(importSaveBtn);
-        col3.add(saveGrid, BorderLayout.CENTER);
+        saveGrid.setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
+
+        rebContent.add(rebirthInfoLbl);
+        rebContent.add(Box.createRigidArea(new Dimension(0, 4)));
+        rebContent.add(rebirthBtn);
+        rebContent.add(Box.createRigidArea(new Dimension(0, 8)));
+        rebContent.add(saveGrid);
+        col1.add(rebContent, BorderLayout.CENTER);
+        p.add(col1);
+
+        // Колонка 2: Кастомизация скинов турбин
+        JPanel col2 = createCardPanel("🎨 СКИНЫ & ТЕМЫ", new Color(0, 210, 211));
+        JPanel skinContent = new JPanel();
+        skinContent.setLayout(new BoxLayout(skinContent, BoxLayout.Y_AXIS));
+        skinContent.setOpaque(false);
+
+        currentSkinLbl = new JLabel("Текущий: 🌿 Классик Эко");
+        currentSkinLbl.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        currentSkinLbl.setForeground(new Color(0, 255, 180));
+
+        skinClassicBtn = new StyledButton("🌿 Классик Эко", new Color(46, 204, 113), e -> setTurbineSkin(TurbineSkin.CLASSIC));
+        skinClassicBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        skinCyberpunkBtn = new StyledButton("⚡ ТРОН Неон", new Color(155, 89, 182), e -> setTurbineSkin(TurbineSkin.CYBERPUNK));
+        skinCyberpunkBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        skinGoldBtn = new StyledButton("👑 Золотой Люкс", new Color(241, 196, 15), e -> setTurbineSkin(TurbineSkin.GOLD));
+        skinGoldBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        skinSteampunkBtn = new StyledButton("⚙️ Стимпанк Медь", new Color(230, 126, 34), e -> setTurbineSkin(TurbineSkin.STEAMPUNK));
+        skinSteampunkBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        skinContent.add(currentSkinLbl);
+        skinContent.add(Box.createRigidArea(new Dimension(0, 4)));
+        skinContent.add(skinClassicBtn);
+        skinContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        skinContent.add(skinCyberpunkBtn);
+        skinContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        skinContent.add(skinGoldBtn);
+        skinContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        skinContent.add(skinSteampunkBtn);
+        col2.add(skinContent, BorderLayout.CENTER);
+        p.add(col2);
+
+        // Колонка 3: Зеленые политики (ESG)
+        JPanel col3 = createCardPanel("🌿 ПОЛИТИКИ (ESG)", new Color(46, 204, 113));
+        JPanel polContent = new JPanel();
+        polContent.setLayout(new BoxLayout(polContent, BoxLayout.Y_AXIS));
+        polContent.setOpaque(false);
+
+        carbonCreditsStatusLbl = new JLabel("Баланс: 0 CC (+1 CC / 1000 кВт⋅ч)");
+        carbonCreditsStatusLbl.setFont(new Font(Font.DIALOG, Font.BOLD, 10));
+        carbonCreditsStatusLbl.setForeground(new Color(38, 222, 129));
+
+        policyTariffBtn = new StyledButton("🌿 Зелёный Тариф (+25%) [50 CC]", new Color(39, 174, 96), e -> buyPolicy("TARIFF"));
+        policyTariffBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        policyDurabilityBtn = new StyledButton("🛡️ Эко-Надёжность (-30% износ) [40 CC]", new Color(41, 128, 185), e -> buyPolicy("DURABILITY"));
+        policyDurabilityBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        policyScienceBtn = new StyledButton("🔬 Грант R&D (x2 SP) [60 CC]", new Color(142, 68, 173), e -> buyPolicy("SCIENCE"));
+        policyScienceBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        policyBatteryBtn = new StyledButton("🔋 Энергорезерв (+50% баки) [80 CC]", new Color(211, 84, 0), e -> buyPolicy("BATTERY"));
+        policyBatteryBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        polContent.add(carbonCreditsStatusLbl);
+        polContent.add(Box.createRigidArea(new Dimension(0, 4)));
+        polContent.add(policyTariffBtn);
+        polContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        polContent.add(policyDurabilityBtn);
+        polContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        polContent.add(policyScienceBtn);
+        polContent.add(Box.createRigidArea(new Dimension(0, 3)));
+        polContent.add(policyBatteryBtn);
+        col3.add(polContent, BorderLayout.CENTER);
         p.add(col3);
+
+        // Колонка 4: Достижения
+        JPanel col4 = createCardPanel("🏆 ДОСТИЖЕНИЯ", new Color(254, 202, 87));
+        achievementsPanel = new JPanel(new GridLayout(4, 2, 3, 2));
+        achievementsPanel.setOpaque(false);
+        col4.add(achievementsPanel, BorderLayout.CENTER);
+        updateAchievementsView();
+        p.add(col4);
 
         return p;
     }
@@ -1632,6 +2121,20 @@ public class WindTycoon extends JFrame {
         pw.println("hiredBroker=" + hiredBroker);
         pw.println("hiredChiefMechanic=" + hiredChiefMechanic);
 
+        pw.println("hydrogenCapacity=" + hydrogenCapacity);
+        pw.println("hydrogenStored=" + hydrogenStored);
+        pw.println("techHydrogenUnlocked=" + techHydrogenUnlocked);
+        pw.println("techOrbitalLink=" + techOrbitalLink);
+
+        pw.println("carbonCredits=" + carbonCredits);
+        pw.println("carbonAccumulator=" + carbonAccumulator);
+        pw.println("policyGreenTariff=" + policyGreenTariff);
+        pw.println("policyDurability=" + policyDurability);
+        pw.println("policyScience=" + policyScience);
+        pw.println("policyBattery=" + policyBattery);
+
+        pw.println("currentSkin=" + currentSkin.name());
+
         pw.println("lastSaveTime=" + System.currentTimeMillis());
 
         StringBuilder sbAch = new StringBuilder();
@@ -1709,6 +2212,28 @@ public class WindTycoon extends JFrame {
                 hiredBroker = Boolean.parseBoolean(line.substring(12));
             } else if (line.startsWith("hiredChiefMechanic=")) {
                 hiredChiefMechanic = Boolean.parseBoolean(line.substring(19));
+            } else if (line.startsWith("hydrogenCapacity=")) {
+                hydrogenCapacity = Double.parseDouble(line.substring(17));
+            } else if (line.startsWith("hydrogenStored=")) {
+                hydrogenStored = Double.parseDouble(line.substring(15));
+            } else if (line.startsWith("techHydrogenUnlocked=")) {
+                techHydrogenUnlocked = Boolean.parseBoolean(line.substring(21));
+            } else if (line.startsWith("techOrbitalLink=")) {
+                techOrbitalLink = Boolean.parseBoolean(line.substring(16));
+            } else if (line.startsWith("carbonCredits=")) {
+                carbonCredits = Integer.parseInt(line.substring(14));
+            } else if (line.startsWith("carbonAccumulator=")) {
+                carbonAccumulator = Double.parseDouble(line.substring(18));
+            } else if (line.startsWith("policyGreenTariff=")) {
+                policyGreenTariff = Boolean.parseBoolean(line.substring(18));
+            } else if (line.startsWith("policyDurability=")) {
+                policyDurability = Boolean.parseBoolean(line.substring(17));
+            } else if (line.startsWith("policyScience=")) {
+                policyScience = Boolean.parseBoolean(line.substring(14));
+            } else if (line.startsWith("policyBattery=")) {
+                policyBattery = Boolean.parseBoolean(line.substring(14));
+            } else if (line.startsWith("currentSkin=")) {
+                try { currentSkin = TurbineSkin.valueOf(line.substring(12)); } catch (Exception ignored) {}
             } else if (line.startsWith("lastSaveTime=")) {
                 lastSaveTime = Long.parseLong(line.substring(13));
             } else if (line.startsWith("achievements=")) {
@@ -2053,6 +2578,18 @@ public class WindTycoon extends JFrame {
             drones.clear();
             achievements.clear();
 
+            techHydrogenUnlocked = false;
+            hydrogenStored = 0.0;
+            hydrogenCapacity = 500.0;
+            techOrbitalLink = false;
+            carbonCredits = 0;
+            carbonAccumulator = 0.0;
+            policyGreenTariff = false;
+            policyDurability = false;
+            policyScience = false;
+            policyBattery = false;
+            currentSkin = TurbineSkin.CLASSIC;
+
             for (int c = 0; c < COLS; c++) {
                 for (int r = 0; r < ROWS; r++) {
                     plots[c][r].turbine = null;
@@ -2122,6 +2659,12 @@ public class WindTycoon extends JFrame {
 
         int w = canvas.getWidth();
         int h = canvas.getHeight();
+
+        for (HoverCar hc : hoverCars) {
+            hc.x += hc.speed * hc.dir;
+            if (hc.dir > 0 && hc.x > w + 60) hc.x = -60;
+            if (hc.dir < 0 && hc.x < -60) hc.x = w + 60;
+        }
 
         for (Cloud cl : clouds) {
             cl.x += cl.speed * (windSpeed / 6.0);
@@ -2356,10 +2899,12 @@ public class WindTycoon extends JFrame {
         double aeroMultiplier = 1.0 + (techAeroLevel * 0.15);
         double wearMultiplier = Math.max(0.12, 1.0 - (techCarbonLevel * 0.25));
 
-        // Эффекты специалистов и сезонов на износ
+        // Эффекты специалистов, политик и сезонов на износ
         if (hiredChiefMechanic) wearMultiplier *= 0.70;
+        if (policyDurability) wearMultiplier *= 0.70;
         if (currentSeason == Season.SPRING) wearMultiplier *= 0.80;
 
+        double greenTariffMult = policyGreenTariff ? 1.25 : 1.0;
         double summitMultiplier = (climateSummitTimer > 0) ? 2.0 : 1.0;
         double winterTariff = (currentSeason == Season.WINTER) ? 1.35 : 1.0;
         double summerSolar = (currentSeason == Season.SUMMER) ? 1.50 : 1.0;
@@ -2386,7 +2931,7 @@ public class WindTycoon extends JFrame {
                     double levelBonus = 1.0 + (p.level - 1) * 0.35;
 
                     double kw = p.turbine.maxPowerKw * localWindEff * healthFactor * levelBonus * comboMultiplier * aeroMultiplier;
-                    double turbineIncome = p.turbine.baseIncomePerSec * localWindEff * healthFactor * levelBonus * comboMultiplier * rebirthMultiplier * summitMultiplier * winterTariff * biomeIncomeMult;
+                    double turbineIncome = p.turbine.baseIncomePerSec * localWindEff * healthFactor * levelBonus * comboMultiplier * rebirthMultiplier * summitMultiplier * winterTariff * biomeIncomeMult * greenTariffMult;
 
                     if (p.turbine == TurbineType.SOLAR_HYBRID && isDaytime) {
                         turbineIncome += (140.0 * levelBonus * rebirthMultiplier * summerSolar);
@@ -2463,10 +3008,28 @@ public class WindTycoon extends JFrame {
             }
         }
 
-        if (batteryCapacity > 0 && currentTotalKw > 0) {
+        // Орбитальный СВЧ-канал (Мега-проект)
+        if (techOrbitalLink) {
+            currentTotalKw += 400.0;
+            double orbitalIncome = 60.0 * rebirthMultiplier * summitMultiplier * winterTariff * biomeIncomeMult * greenTariffMult;
+            currentTotalEarnings += orbitalIncome;
+        }
+
+        double effBatteryCap = batteryCapacity * (policyBattery ? 1.5 : 1.0);
+        double effHydrogenCap = hydrogenCapacity * (policyBattery ? 1.5 : 1.0);
+
+        if (effBatteryCap > 0 && currentTotalKw > 0) {
             double chargeSurplus = currentTotalKw * 0.05;
-            if (batteryStored < batteryCapacity) {
-                batteryStored = Math.min(batteryCapacity, batteryStored + chargeSurplus);
+            if (batteryStored < effBatteryCap) {
+                batteryStored = Math.min(effBatteryCap, batteryStored + chargeSurplus);
+            }
+        }
+
+        // Завод электролиза зеленого водорода (H2)
+        if (techHydrogenUnlocked && currentTotalKw > 0) {
+            double h2Gen = 0.35 + (currentTotalKw / 5000.0) * 0.45;
+            if (hydrogenStored < effHydrogenCap) {
+                hydrogenStored = Math.min(effHydrogenCap, hydrogenStored + h2Gen);
             }
         }
 
@@ -2479,19 +3042,39 @@ public class WindTycoon extends JFrame {
 
         // Авто-сброс ИИ-брокера
         if (hiredBroker && batteryStored >= 200.0) {
-            double effPrice = marketPricePerKwh * marketMultiplier * winterTariff;
+            double effPrice = marketPricePerKwh * marketMultiplier * winterTariff * greenTariffMult;
             if (marketPeakTimer > 0 || effPrice >= 0.30) {
                 dumpBatteryToMarket();
             }
         }
 
         double spGained = (0.3 + (totalTurbineLevels * 0.15)) * rebirthMultiplier;
+        if (policyScience) spGained *= 2.0;
         sciencePoints += spGained;
 
         double salaries = engineersCount * engineerSalaryPerSec;
         balance -= salaries;
         balance += currentTotalEarnings;
-        totalEnergyGenerated += (currentTotalKw / 3600.0);
+
+        double energyInHour = currentTotalKw / 3600.0;
+        totalEnergyGenerated += energyInHour;
+        carbonAccumulator += energyInHour;
+        if (carbonAccumulator >= 1000.0) {
+            int newCC = (int)(carbonAccumulator / 1000.0);
+            carbonCredits += newCC;
+            carbonAccumulator -= newCC * 1000.0;
+            log("🌿 Получено +" + newCC + " ESG Углеродных Кредитов (CC) за чистую выработку энергии!");
+            floatingTexts.add(new FloatingText(canvas.getWidth() / 2, 70, "+" + newCC + " CC", new Color(38, 222, 129)));
+        }
+
+        double currentEffectiveRate = marketPricePerKwh * marketMultiplier * winterTariff * greenTariffMult;
+        priceHistory.add(currentEffectiveRate);
+        while (priceHistory.size() > 45) {
+            priceHistory.remove(0);
+        }
+        if (marketChartPanel != null) {
+            marketChartPanel.repaint();
+        }
 
         currentPowerOutput = currentTotalKw;
         incomePerSecond = currentTotalEarnings - salaries;
@@ -2505,6 +3088,9 @@ public class WindTycoon extends JFrame {
         if (balance >= 50000.0) unlockAchievement("HIGH_ROLLER", "💰 Энергетический магнат", 5000.0);
         if (droneCount >= 1) unlockAchievement("DRONE_ERA", "🤖 Эра автоматизации", 2500.0);
         if (batteryStored >= 1000.0) unlockAchievement("BATTERY_MASTER", "🔋 Мастер накопителей", 3000.0);
+        if (hydrogenStored >= 100.0) unlockAchievement("HYDROGEN_BARON", "💧 Водородный магнат", 5000.0);
+        if (techOrbitalLink) unlockAchievement("ORBITAL_LINK", "🛰️ Космическая энергия", 20000.0);
+        if (carbonCredits >= 50) unlockAchievement("ESG_HERO", "🌿 Зеленый лидер", 10000.0);
         if (cityContractsCompleted >= 5) unlockAchievement("CONTRACT_ACE", "🏙️ Почетный энергетик", 8000.0);
         if (rebirthCount >= 1) unlockAchievement("REBIRTH_HERO", "👑 Легенда зеленой биржи", 25000.0);
     }
@@ -2759,6 +3345,16 @@ public class WindTycoon extends JFrame {
             } else {
                 marketMultiplier = 0.8 + random.nextDouble() * 0.5;
             }
+        }
+        double greenTariffMult = policyGreenTariff ? 1.25 : 1.0;
+        double winterTariff = (currentSeason == Season.WINTER) ? 1.35 : 1.0;
+        double effRate = marketPricePerKwh * marketMultiplier * winterTariff * greenTariffMult;
+        priceHistory.add(effRate);
+        while (priceHistory.size() > 45) {
+            priceHistory.remove(0);
+        }
+        if (marketChartPanel != null) {
+            marketChartPanel.repaint();
         }
         updateControlButtons();
     }
@@ -3134,6 +3730,110 @@ public class WindTycoon extends JFrame {
         updateUI();
     }
 
+    private void researchHydrogen() {
+        if (techHydrogenUnlocked) return;
+        if (sciencePoints < 120) {
+            JOptionPane.showMessageDialog(this, "Нужно 120 SP для завода электролиза водорода!", "R&D", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        sciencePoints -= 120;
+        techHydrogenUnlocked = true;
+        SoundSystem.play("research");
+        unlockAchievement("SCIENCE", "🔬 Инноватор", 1500.0);
+        log("🔬 ИССЛЕДОВАНО: Завод зеленого водорода (H₂)! Электролиз генерирует водород по $2.40/кг!");
+        updateControlButtons();
+        updateUI();
+    }
+
+    private void researchOrbitalLink() {
+        if (techOrbitalLink) return;
+        if (sciencePoints < 350 || balance < 50000.0) {
+            JOptionPane.showMessageDialog(this, "Требуется 350 SP и $50,000 для орбитального СВЧ-канала!", "Мега-проекты", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        sciencePoints -= 350;
+        balance -= 50000.0;
+        techOrbitalLink = true;
+        SoundSystem.play("quest");
+        unlockAchievement("ORBITAL_LINK", "🛰️ Космическая энергия", 20000.0);
+        log("🛰️ МЕГА-ПРОЕКТ ЗАПУЩЕН! Орбитальный спутник передает +400 кВт чистой энергии 24/7!");
+        floatingTexts.add(new FloatingText(canvas.getWidth() / 2, 90, "🛰️ СВЧ-ЛУЧ АКТИВИРОВАН!", new Color(0, 210, 211)));
+        updateControlButtons();
+        updateUI();
+    }
+
+    private void sellHydrogen() {
+        if (!techHydrogenUnlocked || hydrogenStored <= 0.05) return;
+        double payout = hydrogenStored * 2.40;
+        balance += payout;
+        log("💧 Продано " + dfShort.format(hydrogenStored) + " кг чистого зеленого водорода за $" + dfMoney.format(payout) + "!");
+        floatingTexts.add(new FloatingText(canvas.getWidth() / 2, canvas.getHeight() / 2, "+$" + dfMoney.format(payout), new Color(46, 204, 113)));
+        SoundSystem.play("coin");
+        hydrogenStored = 0.0;
+        updateControlButtons();
+        updateUI();
+    }
+
+    private void buyPolicy(String policyType) {
+        switch (policyType) {
+            case "TARIFF":
+                if (policyGreenTariff) return;
+                if (carbonCredits < 50) {
+                    JOptionPane.showMessageDialog(this, "Нужно 50 Carbon Credits (CC) для Зелёного Тарифа!", "ESG Политика", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                carbonCredits -= 50;
+                policyGreenTariff = true;
+                SoundSystem.play("quest");
+                log("🌿 ПРИНЯТА ПОЛИТИКА: Зеленый тариф! Доход от продажи энергии увеличен на +25%!");
+                break;
+            case "DURABILITY":
+                if (policyDurability) return;
+                if (carbonCredits < 40) {
+                    JOptionPane.showMessageDialog(this, "Нужно 40 Carbon Credits (CC) для Эко-Надёжности!", "ESG Политика", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                carbonCredits -= 40;
+                policyDurability = true;
+                SoundSystem.play("quest");
+                log("🛡️ ПРИНЯТА ПОЛИТИКА: Эко-стандарт надежности! Скорость износа ветряков снижена на 30%!");
+                break;
+            case "SCIENCE":
+                if (policyScience) return;
+                if (carbonCredits < 60) {
+                    JOptionPane.showMessageDialog(this, "Нужно 60 Carbon Credits (CC) для Муниципального Гранта!", "ESG Политика", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                carbonCredits -= 60;
+                policyScience = true;
+                SoundSystem.play("quest");
+                log("🔬 ПРИНЯТА ПОЛИТИКА: Научный муниципальный грант! Генерация очков науки SP удвоена (x2)!");
+                break;
+            case "BATTERY":
+                if (policyBattery) return;
+                if (carbonCredits < 80) {
+                    JOptionPane.showMessageDialog(this, "Нужно 80 Carbon Credits (CC) для Стратегического Резерва!", "ESG Политика", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                carbonCredits -= 80;
+                policyBattery = true;
+                SoundSystem.play("quest");
+                log("🔋 ПРИНЯТА ПОЛИТИКА: Стратегический энергорезерв! Вместимость батарей и баков H₂ увеличена на +50%!");
+                break;
+        }
+        updateControlButtons();
+        updateUI();
+    }
+
+    private void setTurbineSkin(TurbineSkin skin) {
+        this.currentSkin = skin;
+        SoundSystem.play("click");
+        log("🎨 Внешний вид ветряков изменен: " + skin.title + "!");
+        floatingTexts.add(new FloatingText(canvas.getWidth() / 2, canvas.getHeight() / 2, skin.title, skin.accentColor));
+        updateControlButtons();
+        canvas.repaint();
+    }
+
     private void triggerRebirth() {
         int turbineCount = 0;
         for (int c = 0; c < COLS; c++) {
@@ -3349,18 +4049,38 @@ public class WindTycoon extends JFrame {
         biomeOceanBtn.setEnabled(currentBiome != Biome.OCEAN);
 
         // Обновление кнопок Биржи
-        if (batteryCapacity <= 0) {
+        double effBatteryCap = batteryCapacity * (policyBattery ? 1.5 : 1.0);
+        if (effBatteryCap <= 0) {
             buyBatteryBtn.setText("🔋 Купить батарею 1,000 кВт⋅ч ($4k)");
             batteryStatusLbl.setText("Батарея не установлена");
             batteryProgressBar.setValue(0);
         } else {
-            double pct = (batteryStored / batteryCapacity) * 100.0;
-            batteryStatusLbl.setText("Хранилище: " + dfShort.format(batteryStored) + " / " + (int)batteryCapacity + " кВт⋅ч (" + (int)pct + "%)");
+            double pct = (batteryStored / effBatteryCap) * 100.0;
+            batteryStatusLbl.setText("Хранилище: " + dfShort.format(batteryStored) + " / " + (int)effBatteryCap + " кВт⋅ч (" + (int)pct + "%)");
             batteryProgressBar.setValue((int)pct);
             buyBatteryBtn.setText("🔋 Расширить накопитель (+$" + (int)(batteryCapacity < 5000 ? 14 : 45) + "k)");
         }
 
-        double rate = marketPricePerKwh * marketMultiplier * ((currentSeason == Season.WINTER) ? 1.35 : 1.0);
+        // Обновление водорода
+        double effHydrogenCap = hydrogenCapacity * (policyBattery ? 1.5 : 1.0);
+        if (hydrogenStatusLbl != null) {
+            if (techHydrogenUnlocked) {
+                double h2Pct = (hydrogenStored / effHydrogenCap) * 100.0;
+                hydrogenStatusLbl.setText("Хранилище: " + dfShort.format(hydrogenStored) + " / " + (int)effHydrogenCap + " кг (" + (int)h2Pct + "%)");
+                hydrogenProgressBar.setValue((int)h2Pct);
+                double h2Val = hydrogenStored * 2.40;
+                sellHydrogenBtn.setText("💧 Продать H₂ (+$" + dfMoney.format(h2Val) + ")");
+                sellHydrogenBtn.setEnabled(hydrogenStored > 0.1);
+            } else {
+                hydrogenStatusLbl.setText("💧 Завод H₂: Требуется R&D (120 SP)");
+                hydrogenProgressBar.setValue(0);
+                sellHydrogenBtn.setText("💧 Завод не исследован");
+                sellHydrogenBtn.setEnabled(false);
+            }
+        }
+
+        double greenTariffMult = policyGreenTariff ? 1.25 : 1.0;
+        double rate = marketPricePerKwh * marketMultiplier * ((currentSeason == Season.WINTER) ? 1.35 : 1.0) * greenTariffMult;
         boolean isPeak = marketMultiplier > 1.8;
         marketPriceLbl.setText("Тариф: $" + dfMoney.format(rate) + " / кВт⋅ч " + (isPeak ? "⚡ [ПИКОВЫЙ СПРОС!]" : "[Обычный]"));
         marketPriceLbl.setForeground(isPeak ? new Color(255, 75, 75) : new Color(254, 202, 87));
@@ -3400,6 +4120,15 @@ public class WindTycoon extends JFrame {
         buyDroneBtn.setText("🚁 Купить ремонтного дрона ($5,000) [" + droneCount + " шт]");
         buyDroneBtn.setEnabled(techDronesUnlocked);
 
+        if (upgHydrogenBtn != null) {
+            upgHydrogenBtn.setText(techHydrogenUnlocked ? "💧 Завод водорода: ИЗУЧЕНО" : "💧 Завод электролиза H₂ (120 SP)");
+            upgHydrogenBtn.setEnabled(!techHydrogenUnlocked);
+        }
+        if (upgOrbitalLinkBtn != null) {
+            upgOrbitalLinkBtn.setText(techOrbitalLink ? "🛰️ СВЧ-Луч: АКТИВЕН (+400 кВт)" : "🛰️ Орбитальный СВЧ-Луч (350 SP / $50k)");
+            upgOrbitalLinkBtn.setEnabled(!techOrbitalLink);
+        }
+
         // Специалисты
         hireMeteorologistBtn.setText(hiredMeteorologist ? "✅ Метеоролог нанят" : "🌦️ Метеоролог ($3.5k / 60 SP)");
         hireMeteorologistBtn.setEnabled(!hiredMeteorologist);
@@ -3412,6 +4141,37 @@ public class WindTycoon extends JFrame {
 
         // Обновление Rebirth
         rebirthInfoLbl.setText("Бонус: +" + (rebirthCount * 50) + "%  |  Требуется: $100,000 и 6 вышек");
+
+        // Обновление Политиков и Скинов
+        if (carbonCreditsStatusLbl != null) {
+            carbonCreditsStatusLbl.setText("Баланс: " + carbonCredits + " CC (+1 CC / 1000 кВт⋅ч)");
+        }
+        if (policyTariffBtn != null) {
+            policyTariffBtn.setText(policyGreenTariff ? "✅ Зелёный Тариф [АКТИВ]" : "🌿 Зелёный Тариф (+25%) [50 CC]");
+            policyTariffBtn.setEnabled(!policyGreenTariff);
+        }
+        if (policyDurabilityBtn != null) {
+            policyDurabilityBtn.setText(policyDurability ? "✅ Эко-Надёжность [АКТИВ]" : "🛡️ Эко-Надёжность (-30% износ) [40 CC]");
+            policyDurabilityBtn.setEnabled(!policyDurability);
+        }
+        if (policyScienceBtn != null) {
+            policyScienceBtn.setText(policyScience ? "✅ Муниципальный Грант [АКТИВ]" : "🔬 Грант R&D (x2 SP) [60 CC]");
+            policyScienceBtn.setEnabled(!policyScience);
+        }
+        if (policyBatteryBtn != null) {
+            policyBatteryBtn.setText(policyBattery ? "✅ Энергорезерв [АКТИВ]" : "🔋 Энергорезерв (+50% баки) [80 CC]");
+            policyBatteryBtn.setEnabled(!policyBattery);
+        }
+
+        if (currentSkinLbl != null) {
+            currentSkinLbl.setText("Текущий стиль: " + currentSkin.title);
+        }
+        if (skinClassicBtn != null) {
+            skinClassicBtn.setEnabled(currentSkin != TurbineSkin.CLASSIC);
+            skinCyberpunkBtn.setEnabled(currentSkin != TurbineSkin.CYBERPUNK);
+            skinGoldBtn.setEnabled(currentSkin != TurbineSkin.GOLD);
+            skinSteampunkBtn.setEnabled(currentSkin != TurbineSkin.STEAMPUNK);
+        }
     }
 
     private void updateGridButtonForEvolution(StyledButton btn, String baseName, TurbineType target, TurbineType current) {
@@ -3440,6 +4200,13 @@ public class WindTycoon extends JFrame {
             batteryVal.setText(dfShort.format(batteryStored) + " кВт⋅ч");
         } else {
             batteryVal.setText("Нет");
+        }
+
+        if (carbonBadge != null) {
+            carbonBadge.setText(carbonCredits + " CC");
+        }
+        if (musicTrackLbl != null) {
+            musicTrackLbl.setText(MusicPlayer.getCurrentTrackTitle());
         }
 
         scienceVal.setText(dfShort.format(sciencePoints) + " SP");
@@ -3573,6 +4340,10 @@ public class WindTycoon extends JFrame {
 
             drawCitySkyline(g2, 0, groundY + farmH, w, h - (groundY + farmH), isNight);
             drawDrones(g2);
+
+            if (techOrbitalLink) {
+                drawOrbitalBeam(g2, w, groundY + farmH / 2, isNight);
+            }
 
             if (tornadoActive) {
                 drawTornado(g2, (int)tornadoX, h / 2);
@@ -3741,73 +4512,256 @@ public class WindTycoon extends JFrame {
             g2.drawString(txt, cx - tw / 2, cy + 6);
         }
 
+        private void drawOrbitalBeam(Graphics2D g2, int w, int targetY, boolean isNight) {
+            int beamX = w / 2;
+            int beamW = 44;
+
+            GradientPaint beamGlow = new GradientPaint(
+                    beamX - beamW / 2, 0, new Color(0, 240, 255, isNight ? 45 : 20),
+                    beamX + beamW / 2, 0, new Color(0, 240, 255, isNight ? 45 : 20)
+            );
+            g2.setPaint(beamGlow);
+            g2.fillRect(beamX - beamW / 2, 0, beamW, targetY);
+
+            g2.setColor(new Color(220, 255, 255, isNight ? 210 : 120));
+            g2.setStroke(new BasicStroke(2.5f));
+            g2.drawLine(beamX, 0, beamX, targetY);
+
+            // Спутник на геостационарной орбите
+            g2.setColor(new Color(241, 196, 15));
+            g2.fillRect(beamX - 7, 3, 14, 6);
+            g2.setColor(new Color(52, 152, 219));
+            g2.fillRect(beamX - 16, 2, 7, 8);
+            g2.fillRect(beamX + 9, 2, 7, 8);
+            g2.setColor(new Color(0, 255, 240));
+            g2.fillOval(beamX - 2, 9, 4, 4);
+        }
+
         private void drawCitySkyline(Graphics2D g2, int x, int y, int w, int h, boolean isNight) {
             Color citySky = isNight ? new Color(15, 22, 36) : new Color(40, 55, 75);
             g2.setColor(citySky);
             g2.fillRect(x, y, w, h);
 
-            int ecoLevel = 1;
-            if (totalEnergyGenerated > 8000.0) ecoLevel = 4;
-            else if (totalEnergyGenerated > 2500.0) ecoLevel = 3;
-            else if (totalEnergyGenerated > 500.0) ecoLevel = 2;
-
-            int numBuildings = 14;
-            int bWidth = w / numBuildings;
+            CityStage stage = CityStage.detect(totalEnergyGenerated, rebirthCount);
             Random cityRnd = new Random(42);
 
-            for (int i = 0; i < numBuildings; i++) {
-                int bx = x + i * bWidth;
-                int bh = 30 + cityRnd.nextInt(h - 35) + (ecoLevel * 8);
-                int by = y + h - bh;
+            if (stage == CityStage.VILLAGE) {
+                // 1. Деревня: уютные домики, печные трубы, дым, заборчики
+                int numHouses = 16;
+                int houseW = w / numHouses;
+                for (int i = 0; i < numHouses; i++) {
+                    int hx = x + i * houseW;
+                    int wallH = 18 + cityRnd.nextInt(16);
+                    int roofH = 12 + cityRnd.nextInt(8);
+                    int wallY = y + h - wallH - 14;
 
-                Color bColor;
-                if (ecoLevel >= 4) {
-                    bColor = isNight ? new Color(18 + (i % 3) * 6, 40 + (i % 3) * 8, 55 + (i % 3) * 8) :
-                                       new Color(45 + (i % 3) * 10, 85 + (i % 3) * 10, 110 + (i % 3) * 10);
-                } else {
-                    bColor = isNight ? new Color(22 + (i % 3) * 6, 30 + (i % 3) * 6, 48 + (i % 3) * 8) :
-                                       new Color(60 + (i % 3) * 10, 75 + (i % 3) * 10, 95 + (i % 3) * 10);
+                    Color wallCol = isNight ? new Color(45 + (i % 3) * 5, 35 + (i % 3) * 5, 30) :
+                                             new Color(130 + (i % 3) * 15, 105 + (i % 3) * 10, 85);
+                    g2.setColor(wallCol);
+                    g2.fillRect(hx + 2, wallY, houseW - 4, wallH);
+
+                    Polygon roof = new Polygon();
+                    roof.addPoint(hx, wallY);
+                    roof.addPoint(hx + houseW / 2, wallY - roofH);
+                    roof.addPoint(hx + houseW, wallY);
+                    Color roofCol = isNight ? new Color(60, 25, 20) : new Color(160, 50, 35);
+                    g2.setColor(roofCol);
+                    g2.fillPolygon(roof);
+
+                    if (i % 2 == 0) {
+                        int chX = hx + houseW / 2 + 3;
+                        int chY = wallY - roofH + 3;
+                        g2.setColor(isNight ? new Color(50, 30, 30) : new Color(110, 50, 40));
+                        g2.fillRect(chX, chY, 4, 8);
+
+                        g2.setColor(new Color(220, 225, 235, isNight ? 70 : 110));
+                        g2.fillOval(chX - 1, chY - 6, 6, 6);
+                        g2.fillOval(chX + 1, chY - 12, 8, 8);
+                    }
+
+                    int winY = wallY + 4;
+                    int winX = hx + houseW / 2 - 4;
+                    g2.setColor(isNight ? new Color(255, 215, 90) : new Color(220, 200, 150));
+                    g2.fillRect(winX, winY, 8, 8);
+                    g2.setColor(new Color(60, 40, 20));
+                    g2.drawLine(winX + 4, winY, winX + 4, winY + 8);
+                    g2.drawLine(winX, winY + 4, winX + 8, winY + 4);
                 }
-                g2.setColor(bColor);
-                g2.fillRect(bx + 2, by, bWidth - 4, bh);
 
-                int floors = bh / 10;
-                for (int fl = 0; fl < floors; fl++) {
-                    int winY = by + 6 + fl * 9;
-                    for (int winX = bx + 6; winX < bx + bWidth - 8; winX += 7) {
-                        if (cityRnd.nextBoolean()) {
-                            if (isNight) {
-                                if (ecoLevel >= 4 && cityRnd.nextInt(4) == 0) {
-                                    g2.setColor(new Color(0, 255, 180));
-                                } else {
-                                    g2.setColor(cityRnd.nextInt(3) == 0 ? new Color(0, 240, 255) : new Color(255, 225, 100));
-                                }
-                            } else {
-                                g2.setColor(new Color(170, 195, 220, 140));
+                g2.setColor(new Color(90, 70, 50));
+                for (int fx = x; fx < x + w; fx += 14) {
+                    g2.fillRect(fx, y + h - 18, 2, 6);
+                }
+                g2.drawLine(x, y + h - 15, x + w, y + h - 15);
+
+            } else if (stage == CityStage.TOWN) {
+                // 2. Индустриальный городок: кирпичные фабрики, водонапорная башня, трубы
+                int numBuildings = 14;
+                int bWidth = w / numBuildings;
+                for (int i = 0; i < numBuildings; i++) {
+                    int bx = x + i * bWidth;
+                    int bh = 30 + cityRnd.nextInt(35);
+                    int by = y + h - bh - 14;
+
+                    Color bColor = isNight ? new Color(42 + (i % 3) * 6, 28 + (i % 3) * 4, 25) :
+                                            new Color(110 + (i % 3) * 12, 65 + (i % 3) * 8, 55);
+                    g2.setColor(bColor);
+                    g2.fillRect(bx + 2, by, bWidth - 4, bh);
+
+                    if (i % 3 == 0) {
+                        int pipeX = bx + bWidth / 2 - 3;
+                        int pipeH = 18;
+                        g2.setColor(isNight ? new Color(30, 20, 20) : new Color(80, 45, 40));
+                        g2.fillRect(pipeX, by - pipeH, 6, pipeH);
+                        g2.setColor(new Color(170, 175, 185, isNight ? 80 : 130));
+                        g2.fillOval(pipeX - 2, by - pipeH - 7, 10, 8);
+                        g2.fillOval(pipeX + 2, by - pipeH - 14, 14, 10);
+                    } else if (i == 7) {
+                        g2.setColor(new Color(100, 110, 125));
+                        g2.fillRect(bx + 4, by - 16, bWidth - 8, 14);
+                        g2.setColor(new Color(60, 70, 85));
+                        g2.drawLine(bx + 6, by - 2, bx + 6, by + 10);
+                        g2.drawLine(bx + bWidth - 7, by - 2, bx + bWidth - 7, by + 10);
+                    }
+
+                    int floors = bh / 9;
+                    for (int fl = 0; fl < floors; fl++) {
+                        int winY = by + 4 + fl * 8;
+                        for (int winX = bx + 5; winX < bx + bWidth - 7; winX += 7) {
+                            if (cityRnd.nextInt(5) != 0) {
+                                g2.setColor(isNight ? (cityRnd.nextInt(3) == 0 ? new Color(255, 200, 80) : new Color(200, 150, 60)) :
+                                                      new Color(160, 180, 200, 160));
+                                g2.fillRect(winX, winY, 4, 5);
                             }
-                            g2.fillRect(winX, winY, 4, 5);
                         }
                     }
                 }
 
-                if (ecoLevel >= 3 && i % 2 == 0) {
-                    g2.setColor(new Color(46, 204, 113, isNight ? 180 : 230));
-                    g2.fillRoundRect(bx + 4, by - 6, bWidth - 8, 7, 4, 4);
+            } else if (stage == CityStage.METROPOLIS) {
+                // 3. Мегаполис: современные небоскребы, вертолетные площадки, сады на крышах
+                int numBuildings = 14;
+                int bWidth = w / numBuildings;
+                for (int i = 0; i < numBuildings; i++) {
+                    int bx = x + i * bWidth;
+                    int bh = 45 + cityRnd.nextInt(h - 50);
+                    int by = y + h - bh - 14;
+
+                    Color bColor = isNight ? new Color(20 + (i % 3) * 6, 32 + (i % 3) * 6, 48 + (i % 3) * 8) :
+                                            new Color(65 + (i % 3) * 10, 85 + (i % 3) * 10, 115 + (i % 3) * 10);
+                    g2.setColor(bColor);
+                    g2.fillRect(bx + 2, by, bWidth - 4, bh);
+
+                    int floors = bh / 8;
+                    for (int fl = 0; fl < floors; fl++) {
+                        int winY = by + 5 + fl * 8;
+                        for (int winX = bx + 5; winX < bx + bWidth - 6; winX += 6) {
+                            if (cityRnd.nextBoolean()) {
+                                if (isNight) {
+                                    g2.setColor(cityRnd.nextInt(4) == 0 ? new Color(0, 230, 255) : new Color(255, 235, 120));
+                                } else {
+                                    g2.setColor(new Color(190, 215, 240, 150));
+                                }
+                                g2.fillRect(winX, winY, 3, 5);
+                            }
+                        }
+                    }
+
+                    if (i % 3 == 0) {
+                        g2.setColor(new Color(46, 204, 113, isNight ? 180 : 230));
+                        g2.fillRoundRect(bx + 4, by - 5, bWidth - 8, 6, 3, 3);
+                    }
+                    if (i % 4 == 1) {
+                        int antX = bx + bWidth / 2;
+                        g2.setColor(new Color(0, 220, 255));
+                        g2.drawLine(antX, by, antX, by - 16);
+                        boolean beaconOn = (System.currentTimeMillis() / 500) % 2 == 0;
+                        if (beaconOn) {
+                            g2.setColor(new Color(255, 60, 60));
+                            g2.fillOval(antX - 2, by - 18, 4, 4);
+                        }
+                    }
                 }
 
-                if (ecoLevel >= 4 && i % 3 == 0) {
-                    g2.setColor(new Color(0, 220, 255, isNight ? 190 : 120));
-                    g2.drawLine(bx + bWidth / 2, by, bx + bWidth / 2, by - 16);
-                    g2.fillOval(bx + bWidth / 2 - 2, by - 18, 4, 4);
+            } else {
+                // 4. NEO_CITY (Киберпанк): гигантские аркологии, билборды, энергомосты, ховеркары!
+                int numBuildings = 12;
+                int bWidth = w / numBuildings;
+                for (int i = 0; i < numBuildings; i++) {
+                    int bx = x + i * bWidth;
+                    int bh = 55 + cityRnd.nextInt(h - 55);
+                    int by = y + h - bh - 14;
+
+                    Color bColor = isNight ? new Color(14, 18, 28) : new Color(30, 38, 52);
+                    g2.setColor(bColor);
+                    g2.fillRect(bx + 2, by, bWidth - 4, bh);
+
+                    Color neonStripe = (i % 2 == 0) ? new Color(0, 240, 255, isNight ? 200 : 130) :
+                                                      new Color(255, 0, 128, isNight ? 200 : 130);
+                    g2.setColor(neonStripe);
+                    g2.drawLine(bx + 2, by, bx + 2, by + bh);
+                    g2.drawLine(bx + bWidth - 3, by, bx + bWidth - 3, by + bh);
+
+                    int floors = bh / 7;
+                    for (int fl = 0; fl < floors; fl++) {
+                        int winY = by + 4 + fl * 7;
+                        for (int winX = bx + 5; winX < bx + bWidth - 6; winX += 6) {
+                            if (cityRnd.nextInt(3) == 0) {
+                                g2.setColor(cityRnd.nextBoolean() ? new Color(0, 255, 180) : new Color(255, 75, 200));
+                                g2.fillRect(winX, winY, 3, 4);
+                            }
+                        }
+                    }
+
+                    if (i % 2 == 0 && i < numBuildings - 1) {
+                        int bridgeY = by + 18;
+                        g2.setColor(new Color(20, 28, 42));
+                        g2.fillRect(bx + bWidth - 2, bridgeY, bWidth + 4, 5);
+                        g2.setColor(new Color(0, 240, 255, isNight ? 220 : 150));
+                        g2.drawLine(bx + bWidth - 2, bridgeY + 2, bx + bWidth * 2 + 2, bridgeY + 2);
+                    }
+
+                    if (i == 2 || i == 6 || i == 9) {
+                        int signY = by + 25;
+                        g2.setColor(new Color(10, 15, 25, 210));
+                        g2.fillRoundRect(bx + 4, signY, bWidth - 8, 12, 4, 4);
+                        g2.setColor(i == 2 ? new Color(0, 240, 255) : (i == 6 ? new Color(255, 0, 128) : new Color(0, 255, 180)));
+                        g2.drawRoundRect(bx + 4, signY, bWidth - 8, 12, 4, 4);
+                        g2.setFont(new Font(Font.MONOSPACED, Font.BOLD, 7));
+                        String signText = i == 2 ? "NEO-GRID" : (i == 6 ? "CYBER-WIND" : "ECO-2099");
+                        g2.drawString(signText, bx + 6, signY + 9);
+                    }
+                }
+
+                // Анимированные ховеркары
+                for (HoverCar hc : hoverCars) {
+                    int hx = (int)hc.x;
+                    int hy = y + (int)hc.y;
+                    g2.setColor(new Color(hc.neonColor.getRed(), hc.neonColor.getGreen(), hc.neonColor.getBlue(), isNight ? 140 : 80));
+                    g2.setStroke(new BasicStroke(1.5f));
+                    if (hc.dir > 0) {
+                        g2.drawLine(hx - 20, hy + 3, hx, hy + 3);
+                    } else {
+                        g2.drawLine(hx + 16, hy + 3, hx + 36, hy + 3);
+                    }
+                    g2.setColor(isNight ? new Color(25, 32, 48) : new Color(50, 62, 80));
+                    g2.fillRoundRect(hx, hy, 16, 6, 3, 3);
+                    g2.setColor(hc.neonColor);
+                    g2.fillRect(hc.dir > 0 ? hx + 11 : hx + 2, hy + 1, 4, 3);
                 }
             }
 
-            g2.setColor(new Color(25, 30, 40));
+            // Дорога у подножия горизонта
+            g2.setColor(new Color(20, 24, 34));
             g2.fillRect(x, y + h - 14, w, 14);
             g2.setColor(new Color(241, 196, 15, isNight ? 180 : 100));
             for (int dx = x; dx < x + w; dx += 28) {
                 g2.fillRect(dx, y + h - 8, 14, 2);
             }
+
+            // Статус бейдж эволюции города
+            g2.setFont(new Font(Font.DIALOG, Font.BOLD, 9));
+            g2.setColor(new Color(220, 235, 255, 180));
+            g2.drawString(stage.title, x + 8, y + 14);
         }
 
         private void drawTornado(Graphics2D g2, int tx, int ty) {
@@ -4004,16 +4958,39 @@ public class WindTycoon extends JFrame {
             mast.lineTo(cx - 3, hubCy);
             mast.closePath();
 
+            Color mastColor1 = currentSkin.mastLight;
+            Color mastColor2 = currentSkin.mastDark;
+            if (isNight && currentSkin == TurbineSkin.CLASSIC) {
+                mastColor1 = new Color(150, 165, 185);
+                mastColor2 = new Color(80, 95, 115);
+            }
+
             GradientPaint mastShading = new GradientPaint(
-                    cx - 8, baseCy, isNight ? new Color(150, 165, 185) : new Color(245, 248, 255),
-                    cx + 8, baseCy, isNight ? new Color(80, 95, 115) : new Color(160, 175, 190)
+                    cx - 8, baseCy, mastColor1,
+                    cx + 8, baseCy, mastColor2
             );
             g2.setPaint(mastShading);
             g2.fill(mast);
 
-            g2.setColor(isNight ? new Color(75, 90, 110) : new Color(135, 150, 165));
+            Color mastBorder = (currentSkin == TurbineSkin.CYBERPUNK) ? currentSkin.neonGlow :
+                               (currentSkin == TurbineSkin.GOLD) ? new Color(212, 175, 55) :
+                               (currentSkin == TurbineSkin.STEAMPUNK) ? new Color(139, 69, 19) :
+                               (isNight ? new Color(75, 90, 110) : new Color(135, 150, 165));
+            g2.setColor(mastBorder);
             g2.setStroke(new BasicStroke(1.2f));
             g2.draw(mast);
+
+            if (currentSkin == TurbineSkin.STEAMPUNK) {
+                g2.setColor(new Color(241, 196, 15));
+                for (int ry = baseCy - 10; ry > hubCy + 8; ry -= 12) {
+                    g2.fillOval(cx - 4, ry, 2, 2);
+                    g2.fillOval(cx + 2, ry, 2, 2);
+                }
+            } else if (currentSkin == TurbineSkin.CYBERPUNK) {
+                g2.setColor(currentSkin.accentColor);
+                g2.setStroke(new BasicStroke(1.0f));
+                g2.drawLine(cx, baseCy - 6, cx, hubCy + 4);
+            }
 
             if (plot.turbine == TurbineType.QUANTUM_VAWT) {
                 g2.setColor(new Color(40, 45, 60));
@@ -4073,28 +5050,54 @@ public class WindTycoon extends JFrame {
                     blade.curveTo(4, -bladeLen * 0.85, 5, -bladeLen * 0.45, 3, 0);
                     blade.closePath();
 
-                    if (isNight) {
-                        g2.setColor(new Color(30, 40, 55));
+                    if (currentSkin == TurbineSkin.CYBERPUNK) {
+                        g2.setColor(new Color(18, 22, 32));
                         g2.fill(blade);
-
-                        g2.setColor(new Color(plot.turbine.neonColor.getRed(), plot.turbine.neonColor.getGreen(), plot.turbine.neonColor.getBlue(), 90));
-                        g2.setStroke(new BasicStroke(4.0f));
-                        g2.draw(blade);
-
-                        g2.setColor(plot.turbine.neonColor);
+                        g2.setColor(currentSkin.neonGlow);
                         g2.setStroke(new BasicStroke(1.8f));
                         g2.draw(blade);
-
-                        g2.fillOval(-3, -(int)bladeLen, 6, 9);
-                    } else {
-                        g2.setColor(new Color(255, 255, 255));
+                        g2.setColor(currentSkin.accentColor);
+                        g2.fillOval(-3, -(int)bladeLen, 6, 7);
+                    } else if (currentSkin == TurbineSkin.GOLD) {
+                        g2.setColor(new Color(255, 215, 0));
                         g2.fill(blade);
-                        g2.setColor(new Color(185, 195, 210));
-                        g2.setStroke(new BasicStroke(1.0f));
+                        g2.setColor(new Color(255, 245, 160));
+                        g2.setStroke(new BasicStroke(1.2f));
                         g2.draw(blade);
+                        g2.setColor(new Color(255, 255, 255));
+                        g2.fillOval(-2, -(int)bladeLen + 2, 4, 5);
+                    } else if (currentSkin == TurbineSkin.STEAMPUNK) {
+                        g2.setColor(new Color(184, 115, 51));
+                        g2.fill(blade);
+                        g2.setColor(new Color(243, 156, 18));
+                        g2.setStroke(new BasicStroke(1.2f));
+                        g2.draw(blade);
+                        g2.setColor(new Color(139, 69, 19));
+                        g2.fillOval(-2, -(int)bladeLen + 1, 4, 6);
+                    } else {
+                        if (isNight) {
+                            g2.setColor(new Color(30, 40, 55));
+                            g2.fill(blade);
 
-                        g2.setColor(plot.turbine.themeColor);
-                        g2.fillOval(-3, -(int)bladeLen, 6, 10);
+                            g2.setColor(new Color(plot.turbine.neonColor.getRed(), plot.turbine.neonColor.getGreen(), plot.turbine.neonColor.getBlue(), 90));
+                            g2.setStroke(new BasicStroke(4.0f));
+                            g2.draw(blade);
+
+                            g2.setColor(plot.turbine.neonColor);
+                            g2.setStroke(new BasicStroke(1.8f));
+                            g2.draw(blade);
+
+                            g2.fillOval(-3, -(int)bladeLen, 6, 9);
+                        } else {
+                            g2.setColor(new Color(255, 255, 255));
+                            g2.fill(blade);
+                            g2.setColor(new Color(185, 195, 210));
+                            g2.setStroke(new BasicStroke(1.0f));
+                            g2.draw(blade);
+
+                            g2.setColor(plot.turbine.themeColor);
+                            g2.fillOval(-3, -(int)bladeLen, 6, 10);
+                        }
                     }
                 }
 

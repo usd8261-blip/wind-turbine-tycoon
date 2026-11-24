@@ -604,6 +604,39 @@ public class TycoonGameView extends View {
             pText.setTextSize(10);
             canvas.drawText(String.format(Locale.US, "%.0f / %.0f кВт (Осталось: %.0fc)", currentKW, c.targetKW, c.remainingSeconds), pad + 10, contY + 68, pText);
         }
+
+        // Green Hydrogen & Mega-Projects Card
+        float h2Y = contY + contH + 8;
+        float h2H = 46;
+        rectTemp.set(pad, h2Y, w - pad, h2Y + h2H);
+        pFill.setColor(0xFF0F2B36);
+        canvas.drawRoundRect(rectTemp, 10, 10, pFill);
+        pStroke.setColor(0xFF06B6D4);
+        pStroke.setStrokeWidth(1.2f);
+        canvas.drawRoundRect(rectTemp, 10, 10, pStroke);
+
+        pText.setColor(0xFF38BDF8);
+        pText.setTextSize(11);
+        pText.setTextAlign(Paint.Align.LEFT);
+        pText.setFakeBoldText(true);
+        String h2Title = engine.techHydrogenUnlocked ?
+                String.format(Locale.US, "💧 H₂ Хранилище: %.1f / %.0f кг ($2.40/кг)", engine.hydrogenStored, engine.hydrogenCapacity) :
+                "💧 Водородный завод (Откройте в Штабе)";
+        canvas.drawText(h2Title, pad + 10, h2Y + 18, pText);
+
+        pText.setColor(0xFFA7F3D0);
+        pText.setTextSize(10);
+        pText.setFakeBoldText(false);
+        canvas.drawText(String.format(Locale.US, "🌱 ESG Кредиты: %d CC | Орбита: %s",
+                engine.carbonCredits, engine.techOrbitalLink ? "+400 кВт (Активен)" : "Нет связи"), pad + 10, h2Y + 34, pText);
+
+        if (engine.techHydrogenUnlocked && engine.hydrogenStored >= 1.0) {
+            float sellW = 75;
+            float sellH = 34;
+            float sellX = w - pad - sellW - 6;
+            float sellY = h2Y + 6;
+            drawActionButton(canvas, sellX, sellY, sellW, sellH, "ПРОДАТЬ", "$" + (int) (engine.hydrogenStored * 2.4), 0xFF0284C7, 0xFF38BDF8);
+        }
     }
 
     private void drawScienceTab(Canvas canvas, int w, float y, float h) {
@@ -618,9 +651,9 @@ public class TycoonGameView extends View {
 
         float itemY = y + 20;
         ResearchItem[] items = ResearchItem.values();
-        float itemH = (h - 24) / Math.min(5, items.length);
+        float itemH = (h - 24) / items.length;
 
-        for (int i = 0; i < Math.min(5, items.length); i++) {
+        for (int i = 0; i < items.length; i++) {
             ResearchItem res = items[i];
             float iy = itemY + i * itemH;
 
@@ -629,14 +662,14 @@ public class TycoonGameView extends View {
             canvas.drawRoundRect(rectTemp, 8, 8, pFill);
 
             pText.setColor(res.unlocked ? 0xFF34D399 : 0xFFE2E8F0);
-            pText.setTextSize(12);
+            pText.setTextSize(itemH < 44 ? 11 : 12);
             pText.setFakeBoldText(true);
-            canvas.drawText(res.icon + " " + res.title, pad + 8, iy + 16, pText);
+            canvas.drawText(res.icon + " " + res.title, pad + 8, iy + itemH * 0.42f, pText);
             pText.setFakeBoldText(false);
 
             pText.setColor(0xFF94A3B8);
-            pText.setTextSize(10);
-            canvas.drawText(res.description, pad + 8, iy + 30, pText);
+            pText.setTextSize(itemH < 44 ? 9 : 10);
+            canvas.drawText(res.description, pad + 8, iy + itemH * 0.80f, pText);
 
             float btnW = 85;
             float btnH = itemH - 8;
@@ -948,12 +981,27 @@ public class TycoonGameView extends View {
                     return;
                 }
             }
+        } else if (currentTab == Tab.MARKET) {
+            float cardY = contentY + 22;
+            float cardH = 46;
+            float contY = cardY + cardH + 8;
+            float contH = 75;
+            float h2Y = contY + contH + 8;
+            float sellW = 75;
+            float sellH = 34;
+            float sellX = w - pad - sellW - 6;
+            float sellY = h2Y + 6;
+            if (engine.techHydrogenUnlocked && x >= sellX && x <= sellX + sellW && y >= sellY && y <= sellY + sellH) {
+                engine.sellHydrogen();
+                sound.playSound("coin");
+                return;
+            }
         } else if (currentTab == Tab.SCIENCE) {
             float itemY = contentY + 20;
             ResearchItem[] items = ResearchItem.values();
-            float itemH = (contentH - 24) / Math.min(5, items.length);
+            float itemH = (contentH - 24) / items.length;
 
-            for (int i = 0; i < Math.min(5, items.length); i++) {
+            for (int i = 0; i < items.length; i++) {
                 float iy = itemY + i * itemH;
                 float btnW = 85;
                 float btnH = itemH - 8;
